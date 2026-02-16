@@ -1,0 +1,105 @@
+diff --git a/.gitmodules b/.gitmodules
+index 66647d7..c5a54b9 100644
+--- a/.gitmodules
++++ b/.gitmodules
+@@ -1,3 +1,3 @@
+ [submodule "src/dev/storage/simplessd"]
+ 	path = src/dev/storage/simplessd
+-	url = git@github.com:simplessd/simplessd.git
++	url = https://github.com/simplessd/simplessd.git
+diff --git a/SConstruct b/SConstruct
+index 704d323..7034280 100755
+--- a/SConstruct
++++ b/SConstruct
+@@ -686,6 +686,10 @@ if main['USE_PYTHON']:
+     py_includes = map(lambda s: s[2:] if s.startswith('-I') else s, py_includes)
+     main.Append(CPPPATH=py_includes)
+ 
++    conda_prefix = os.environ.get('CONDA_PREFIX')
++    if conda_prefix:
++        main.Append(LIBPATH=[joinpath(conda_prefix, 'lib')])
++
+     # Read the linker flags and split them into libraries and other link
+     # flags. The libraries are added later through the call the CheckLib.
+     py_ld_flags = readCommand([python_config, '--ldflags'],
+diff --git a/ext/pybind11/include/pybind11/attr.h b/ext/pybind11/include/pybind11/attr.h
+index 6962d6f..ac2cb38 100644
+--- a/ext/pybind11/include/pybind11/attr.h
++++ b/ext/pybind11/include/pybind11/attr.h
+@@ -10,6 +10,8 @@
+ 
+ #pragma once
+ 
++#include <cstdint>
++
+ #include "cast.h"
+ 
+ NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
+diff --git a/src/base/cprintf_formats.hh b/src/base/cprintf_formats.hh
+index cca41e9..67ec1c0 100644
+--- a/src/base/cprintf_formats.hh
++++ b/src/base/cprintf_formats.hh
+@@ -32,6 +32,7 @@
+ #define __BASE_CPRINTF_FORMATS_HH__
+ 
+ #include <cstring>
++#include <cstdint>
+ #include <ostream>
+ #include <sstream>
+ 
+diff --git a/src/dev/storage/simplessd b/src/dev/storage/simplessd
+--- a/src/dev/storage/simplessd
++++ b/src/dev/storage/simplessd
+@@ -1 +1 @@
+-Subproject commit 73ad8ad5220ce5ebfeb055687d0328765a046c0f
++Subproject commit 73ad8ad5220ce5ebfeb055687d0328765a046c0f-dirty
+diff --git a/src/sim/init_signals.cc b/src/sim/init_signals.cc
+index 0d55b85..1c7da2d 100644
+--- a/src/sim/init_signals.cc
++++ b/src/sim/init_signals.cc
+@@ -65,19 +65,30 @@
+ 
+ using namespace std;
+ 
+-// Use an separate stack for fatal signal handlers
+-static uint8_t fatalSigStack[2 * SIGSTKSZ];
++// Use a separate stack for fatal signal handlers
++static uint8_t *fatalSigStack = nullptr;
++static size_t fatalSigStackSize = 0;
+ 
+ static bool
+ setupAltStack()
+ {
+     stack_t stack;
++    if (!fatalSigStack) {
++        size_t stack_size = static_cast<size_t>(SIGSTKSZ) * 2;
++#ifdef MINSIGSTKSZ
++        if (stack_size < static_cast<size_t>(MINSIGSTKSZ)) {
++            stack_size = static_cast<size_t>(MINSIGSTKSZ);
++        }
++#endif
++        fatalSigStack = new uint8_t[stack_size];
++        fatalSigStackSize = stack_size;
++    }
+ #if defined(__FreeBSD__) && (__FreeBSD_version < 1100097)
+     stack.ss_sp = (char *)fatalSigStack;
+ #else
+     stack.ss_sp = fatalSigStack;
+ #endif
+-    stack.ss_size = sizeof(fatalSigStack);
++    stack.ss_size = fatalSigStackSize;
+     stack.ss_flags = 0;
+ 
+     return sigaltstack(&stack, NULL) == 0;
+diff --git a/src/systemc/ext/tlm_utils/instance_specific_extensions_int.h b/src/systemc/ext/tlm_utils/instance_specific_extensions_int.h
+index a391091..e7036ac 100644
+--- a/src/systemc/ext/tlm_utils/instance_specific_extensions_int.h
++++ b/src/systemc/ext/tlm_utils/instance_specific_extensions_int.h
+@@ -19,6 +19,7 @@
+ #ifndef __SYSTEMC_EXT_TLM_UTILS_INSTANCE_SPECIFIC_EXTENSIONS_INT_H__
+ #define __SYSTEMC_EXT_TLM_UTILS_INSTANCE_SPECIFIC_EXTENSIONS_INT_H__
+ 
++#include <typeinfo>
+ #include <vector>
+ 
+ #include "../tlm_core/2/generic_payload/array.hh"
