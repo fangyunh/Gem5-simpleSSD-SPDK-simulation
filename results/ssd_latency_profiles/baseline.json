@@ -1,0 +1,13 @@
+{
+  "name": "baseline",
+  "units": {
+    "read": "us",
+    "program": "us",
+    "erase": "ms"
+  },
+  "values": {
+    "page_read_tR": 45,
+    "page_program_tPROG": 350,
+    "block_erase_tBERS": 3.5
+  }
+}

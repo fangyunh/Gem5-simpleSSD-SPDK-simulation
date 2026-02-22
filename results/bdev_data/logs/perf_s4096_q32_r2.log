@@ -1,0 +1,11 @@
+# started on Fri Feb 13 08:09:10 2026
+
+<not counted>;;cpu_atom/cycles/;0;0.00;;
+158493326758;;cpu_core/cycles/;29970089736;100.00;;
+<not counted>;;cpu_atom/instructions/;0;0.00;;
+171160863762;;cpu_core/instructions/;29970092929;100.00;1.08;insn per cycle
+<not counted>;;cpu_atom/LLC-load-misses/;0;0.00;;
+4502495851;;cpu_core/LLC-load-misses/;29970095904;100.00;;
+<not supported>;MiB;uncore_imc_free_running/data_read/;0;100.00;;
+<not supported>;MiB;uncore_imc_free_running/data_write/;0;100.00;;
+<not supported>;Joules;power/energy-pkg/;0;100.00;;

@@ -1,0 +1,13 @@
+{
+  "name": "storage_next_SSD",
+  "units": {
+    "read": "ns",
+    "program": "ns",
+    "erase": "ns"
+  },
+  "values": {
+    "page_read_tR": 100,
+    "page_program_tPROG": 100,
+    "block_erase_tBERS": 100
+  }
+}

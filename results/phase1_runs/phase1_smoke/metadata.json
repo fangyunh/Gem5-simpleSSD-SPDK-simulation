@@ -1,0 +1,22 @@
+{
+  "run_tag": "phase1_smoke",
+  "cores": "1",
+  "core_masks": "",
+  "qpairs": "1",
+  "qd_list": "16",
+  "io_sizes": "4096",
+  "repeats": 1,
+  "steady_time": 10,
+  "pci_addr": "0000:02:00.0",
+  "pci_check": 0,
+  "perf_enable": 1,
+  "skip_setup": 1,
+  "hugemem_mb": 2048,
+  "gem5": {
+    "kernel": "/home/fangy6/SimpleSSD_Gem5_simulation/assets/vmlinux-5.4.49",
+    "disk_image": "/home/fangy6/SimpleSSD_Gem5_simulation/assets/x86-ubuntu.img",
+    "mem_size": "4GB",
+    "ssd_config": "/home/fangy6/SimpleSSD_Gem5_simulation/fast_ssd.cfg",
+    "checkpoint_dir": "/home/fangy6/SimpleSSD_Gem5_simulation/results/checkpoints"
+  }
+}

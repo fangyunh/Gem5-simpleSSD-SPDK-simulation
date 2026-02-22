@@ -1,0 +1,95 @@
+warn: Physical memory size specified is 4GB which is greater than 3GB.  Twice the number of memory controllers would be created.
+gem5 Simulator System.  http://gem5.org
+gem5 is copyrighted software; use the --copyright option for details.
+
+gem5 compiled Feb 16 2026 15:59:36
+gem5 started Feb 22 2026 00:36:45
+gem5 executing on tzhang1, pid 3326697
+command line: ./build/X86/gem5.opt --listener-mode=on configs/example/fs.py --kernel=/home/fangy6/SimpleSSD_Gem5_simulation/assets/vmlinux-5.4.49 --disk-image=/home/fangy6/SimpleSSD_Gem5_simulation/assets/x86-ubuntu.img --mem-size=4GB --root-device=/dev/hda1 --ssd-interface=nvme --ssd-config=/home/fangy6/SimpleSSD_Gem5_simulation/fast_ssd.cfg --checkpoint-dir=/home/fangy6/SimpleSSD_Gem5_simulation/results/checkpoints --script=/home/fangy6/SimpleSSD_Gem5_simulation/logs/phase1_readfile_phase1_smoke.sh
+
+Global frequency set at 1000000000000 ticks per second
+warn: DRAM device capacity (8192 Mbytes) does not match the address range assigned (4096 Mbytes)
+warn: DRAM device capacity (8192 Mbytes) does not match the address range assigned (1024 Mbytes)
+info: kernel located at: /home/fangy6/SimpleSSD_Gem5_simulation/assets/vmlinux-5.4.49
+system.pc.com_1.device: Listening for connections on port 3456
+0: PAL: Channel |   Way   |   Die   |  Plane  |  Block  |   Page  
+0: PAL:       8 |       4 |       2 |       2 |     512 |     512
+0: PAL: Multi-plane mode enabled
+0: PAL: Superblock multiplier
+0: PAL: x8 (Channel)
+0: PAL: x2 (Plane)
+0: PAL: Page size 16384 -> 262144
+0: PAL: Total block count 65536 -> 4096
+0: PAL::PALOLD: NAND timing:
+0: PAL::PALOLD: Operation |     LSB    |     CSB    |     MSB    |    DMA 0   |    DMA 
+0: PAL::PALOLD:    READ   |      45000 |      45000 |      45000 |      16689 |   39062500
+0: PAL::PALOLD:    WRITE  |     350000 |     350000 |     350000 |   39079188 |       2384
+0: PAL::PALOLD:    ERASE  |                              3500000 |      11920 |       2384
+0: FTL: Total physical blocks 4096
+0: FTL: Total logical blocks 3072
+0: FTL: Logical page size 262144
+0: FTL::PageMapping: Initialization started
+0: FTL::PageMapping: Total logical pages: 1572864
+0: FTL::PageMapping: Total logical pages to fill: 0 (0.00 %)
+0: FTL::PageMapping: Total invalidated pages to create: 0 (0.00 %)
+0: FTL::PageMapping: Filling finished. Page status:
+0: FTL::PageMapping:   Total valid physical pages: 0 (0.00 %, target: 0, error: 0)
+0: FTL::PageMapping:   Total invalid physical pages: 0 (0.00 %, target: 0, error: 0)
+0: FTL::PageMapping: Initialization finished
+0: ICL::GenericCache: CREATE  | Set size 2048 | Way size 8 | Line size 32768 | Capacity 536870912
+0: ICL::GenericCache: CREATE  | line count in super page 8 | line count in max I/O 64
+0: HIL::NVMe: NS 1    | CREATE | LBA size 512 | Capacity 805306368
+      0: system.pc.south_bridge.cmos.rtc: Real-time clock set to Sun Jan  1 00:00:00 2012
+0: system.remote_gdb: listening for remote gdb on port 7000
+warn: Reading current count from inactive timer.
+**** REAL SIMULATION ****
+info: Entering event queue @ 0.  Starting simulation...
+1945636500: system.pc.com_1.device: attach terminal 0
+warn: x86 cpuid family 0x0000: unimplemented function 6
+warn: x86 cpuid family 0x0000: unimplemented function 6
+warn: x86 cpuid family 0x0000: unimplemented function 6
+warn: instruction 'fninit' unimplemented
+warn: Don't know what interrupt to clear for console.
+warn: instruction 'sgdt_Ms' unimplemented
+warn: x86 cpuid family 0x0000: unimplemented function 6
+warn: x86 cpuid family 0x0000: unimplemented function 6
+warn: x86 cpuid family 0x0000: unimplemented function 6
+warn: x86 cpuid: unknown family 0x4000
+warn: instruction 'fwait' unimplemented
+781589478500: HIL::NVMe: INTR    | MSI disabled | 1 vectors
+781590494500: HIL::NVMe: INTR    | MSI-X disabled | 512 vectors
+warn: Tried to clear PCI interrupt 14
+warn: Write to unknown i8042 (keyboard controller) command port.
+warn: MOVNTDQ: Ignoring non-temporal hint, modeling as cacheable!
+warn: x86 cpuid family 0x0000: unimplemented function 4
+warn: instruction 'pshufb_Vdq_Wdq' unimplemented
+warn: instruction 'pshufb_Vdq_Wdq' unimplemented
+warn: instruction 'pshufb_Vdq_Wdq' unimplemented
+warn: instruction 'pshufb_Vdq_Wdq' unimplemented
+warn: instruction 'pshufb_Vdq_Wdq' unimplemented
+warn: instruction 'pshufb_Vdq_Wdq' unimplemented
+warn: instruction 'pshufb_Vdq_Wdq' unimplemented
+warn: instruction 'pshufb_Vdq_Wdq' unimplemented
+warn: instruction 'palignr_Vdq_Wdq_Ib' unimplemented
+warn: instruction 'palignr_Vdq_Wdq_Ib' unimplemented
+warn: instruction 'palignr_Vdq_Wdq_Ib' unimplemented
+warn: instruction 'palignr_Vdq_Wdq_Ib' unimplemented
+warn: instruction 'palignr_Vdq_Wdq_Ib' unimplemented
+warn: instruction 'palignr_Vdq_Wdq_Ib' unimplemented
+warn: instruction 'palignr_Vdq_Wdq_Ib' unimplemented
+warn: instruction 'palignr_Vdq_Wdq_Ib' unimplemented
+warn: x86 cpuid family 0x0000: unimplemented function 4
+Exiting @ tick 5550102694000 because m5_exit instruction encountered
+5550102694000: CPU: Begin CPU power calculation
+5550102694000: CPU: Core:
+5550102694000: CPU:   Area: 7.330424 mm^2
+5550102694000: CPU:   Peak Dynamic: 1.138582 W
+5550102694000: CPU:   Subthreshold Leakage: 0.659711 W
+5550102694000: CPU:   Gate Leakage: 0.124166 W
+5550102694000: CPU:   Runtime Dynamic: 0.018159 W
+5550102694000: CPU: L2:
+5550102694000: CPU:   Area: 7.336225 mm^2
+5550102694000: CPU:   Peak Dynamic: 0.172975 W
+5550102694000: CPU:   Subthreshold Leakage: 0.245227 W
+5550102694000: CPU:   Gate Leakage: 0.011251 W
+5550102694000: CPU:   Runtime Dynamic: 0.000000 W

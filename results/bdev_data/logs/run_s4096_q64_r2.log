@@ -1,0 +1,21 @@
+{
+  "results": [
+    {
+      "job": "Malloc0",
+      "core_mask": "0x4",
+      "workload": "randread",
+      "status": "finished",
+      "queue_depth": 64,
+      "io_size": 4096,
+      "runtime": 30.000034,
+      "iops": 3867709.74992895,
+      "mibps": 15108.24121065996,
+      "io_failed": 0,
+      "io_timeout": 0,
+      "avg_latency_us": 16.489059492285524,
+      "min_latency_us": 2.272727272727273,
+      "max_latency_us": 65.45454545454545
+    }
+  ],
+  "core_count": 1
+}
