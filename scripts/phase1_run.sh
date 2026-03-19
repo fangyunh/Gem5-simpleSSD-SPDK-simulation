@@ -7,8 +7,8 @@
 
 # --- CONFIGURATION (Adjust these) ---
 PCI_ADDR=${PCI_ADDR:-"0000:02:00.0"}  # PCI Address of the TARGET (Secondary) Drive
-CORE_ID=${CORE_ID:-2}                 # CPU Core to pin the workload to
-CORE_MASK=${CORE_MASK:-"0x4"}         # Hex mask for CORE_ID (used if CORE_IDS is unset)
+CORE_ID=${CORE_ID:-0}                 # CPU Core to pin the workload to
+CORE_MASK=${CORE_MASK:-"0x1"}         # Hex mask for CORE_ID (used if CORE_IDS is unset)
 CORE_IDS=(${CORE_IDS:-$CORE_ID})       # Space-separated list: "0 1 2"
 CORE_MASKS=${CORE_MASKS:-""}          # Optional space-separated list: "0x1 0x2 0x4"
 
@@ -27,6 +27,7 @@ SPDK_PERF_BIN=${SPDK_PERF_BIN:-"$SPDK_DIR/build/bin/spdk_nvme_perf"}
 # Hugepage memory in MB for scripts/setup.sh (override via env HUGEMEM_MB)
 HUGEMEM_MB=${HUGEMEM_MB:-2048}
 SKIP_SETUP=${SKIP_SETUP:-0}
+NO_HUGE=${NO_HUGE:-0}
 # Ensure root
 if [ "$EUID" -ne 0 ]; then
   echo "Please run as root"
@@ -54,9 +55,25 @@ if [ "$PERF_ENABLE" -eq 1 ] && ! command -v perf >/dev/null 2>&1; then
     PERF_ENABLE=0
 fi
 
+detect_nvme_sysfs() {
+    # Class 0x010802 = NVMe controller
+    local bdf_list=()
+    for dev in /sys/bus/pci/devices/*; do
+        [ -r "$dev/class" ] || continue
+        if grep -q "0x010802" "$dev/class" 2>/dev/null; then
+            bdf_list+=("${dev##*/}")
+        fi
+    done
+    if [ "${#bdf_list[@]}" -eq 1 ]; then
+        echo "${bdf_list[0]}"
+        return 0
+    fi
+    return 1
+}
+
 # Validate PCI address (auto-detect if needed)
-if [ "$PCI_CHECK" -eq 1 ]; then
-    if [ -z "$PCI_ADDR" ] || ! lspci -s "$PCI_ADDR" >/dev/null 2>&1; then
+if [ -z "$PCI_ADDR" ] || [ ! -d "/sys/bus/pci/devices/$PCI_ADDR" ]; then
+    if [ "$PCI_CHECK" -eq 1 ] && command -v lspci >/dev/null 2>&1; then
         NVME_LIST=$(lspci -D -nn | grep -i "Non-Volatile memory controller" || true)
         NVME_COUNT=$(echo "$NVME_LIST" | grep -c "Non-Volatile" || true)
 
@@ -66,14 +83,29 @@ if [ "$PCI_CHECK" -eq 1 ]; then
         else
             echo "PCI_ADDR is unset or invalid. Detected NVMe devices:"
             echo "$NVME_LIST"
-            echo "Please set PCI_ADDR to the correct device and rerun."
-            exit 1
         fi
+    else
+        SYSFS_NVME=$(detect_nvme_sysfs || true)
+        if [ -n "$SYSFS_NVME" ]; then
+            PCI_ADDR="$SYSFS_NVME"
+            echo "Auto-detected NVMe PCI address via sysfs: $PCI_ADDR"
+        fi
+    fi
+
+    if [ -z "$PCI_ADDR" ] || [ ! -d "/sys/bus/pci/devices/$PCI_ADDR" ]; then
+        echo "PCI_ADDR is unset or invalid. Please set PCI_ADDR to the correct device and rerun."
+        exit 1
     fi
 fi
 
 # Enable perf events
 echo 0 > /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo "Warning: could not lower perf_event_paranoid"
+
+# Remove memlock limit so DPDK/VFIO can mmap hugepages and the VFIO device.
+# The Ubuntu 18.04 guest image has a 16MB memlock limit for root which is too
+# low for DPDK.  Running as root means ulimit -l unlimited always succeeds.
+ulimit -l unlimited 2>/dev/null || echo "Warning: could not raise memlock limit"
+echo "memlock limit: $(ulimit -l)"
 
 # Run SPDK setup (hugepages + unbind NVMe/I/OAT) as recommended
 if [ "$SKIP_SETUP" -eq 0 ]; then
@@ -82,11 +114,45 @@ if [ "$SKIP_SETUP" -eq 0 ]; then
         exit 1
     fi
 
+    # -----------------------------------------------------------------------
+    # Driver selection: prefer vfio-pci with noiommu over uio_pci_generic.
+    #
+    # In gem5 (no IOMMU), uio_pci_generic.probe() rejects the NVMe device
+    # when pdev->irq==0 (which occurs on kernel 5.4+ after the nvme driver
+    # tears down MSI-X and ACPI IRQ re-assignment is skipped).  vfio-pci
+    # has no such check; use it via VFIO noiommu mode when available.
+    #
+    # DRIVER_OVERRIDE can be pre-set in the environment to override this.
+    # -----------------------------------------------------------------------
+    if [ -z "${DRIVER_OVERRIDE:-}" ]; then
+        if [ -e /sys/module/vfio/parameters/enable_unsafe_noiommu_mode ]; then
+            echo 1 > /sys/module/vfio/parameters/enable_unsafe_noiommu_mode 2>/dev/null || true
+            export DRIVER_OVERRIDE=vfio-pci
+            echo "SPDK driver: vfio-pci (noiommu mode enabled)"
+        elif [ -d /sys/bus/pci/drivers/uio_pci_generic ]; then
+            echo "SPDK driver: uio_pci_generic (VFIO not available)"
+        else
+            echo "Warning: neither vfio-pci nor uio_pci_generic sysfs entry found."
+        fi
+    else
+        echo "SPDK driver: $DRIVER_OVERRIDE (pre-set)"
+    fi
+
     echo "Running SPDK setup with HUGEMEM=${HUGEMEM_MB}MB..."
-    HUGEMEM="$HUGEMEM_MB" "$SPDK_DIR/scripts/setup.sh" || {
+    if ! HUGEMEM="$HUGEMEM_MB" "$SPDK_DIR/scripts/setup.sh"; then
         echo "SPDK setup failed."
+        if [ -d /sys/bus/pci/drivers/uio_pci_generic ]; then
+            echo "uio_pci_generic driver is present in sysfs."
+        else
+            echo "uio_pci_generic driver is NOT present in sysfs."
+        fi
+        if [ -d /sys/bus/pci/drivers/vfio-pci ]; then
+            echo "vfio-pci driver is present in sysfs."
+        else
+            echo "vfio-pci driver is NOT present in sysfs."
+        fi
         exit 1
-    }
+    fi
 
     # Ensure devices are rebound on exit
     _spdk_reset() {
@@ -122,6 +188,44 @@ if [ ! -x "$SPDK_PERF_BIN" ]; then
     fi
 fi
 
+if command -v ldd >/dev/null 2>&1; then
+    if ldd "$SPDK_PERF_BIN" 2>/dev/null | grep -q "libssl.so.3 => not found"; then
+        echo "Missing libssl.so.3 in the guest image."
+        echo "Install OpenSSL 3 runtime (libssl3) or copy libssl.so.3 + libcrypto.so.3 into the image and run ldconfig."
+        exit 1
+    fi
+    if ldd "$SPDK_PERF_BIN" 2>/dev/null | grep -q "libfuse3.so.3 => not found"; then
+        echo "Missing libfuse3.so.3 in the guest image."
+        echo "Install FUSE3 runtime (libfuse3-3) or copy libfuse3.so.3 into the image and run ldconfig."
+        exit 1
+    fi
+    if ldd "$SPDK_PERF_BIN" 2>/dev/null | grep -q "libaio.so.1t64 => not found"; then
+        echo "Missing libaio.so.1t64 in the guest image."
+        echo "Install libaio runtime or copy libaio.so.1t64 into the image and run ldconfig."
+        exit 1
+    fi
+    if ldd "$SPDK_PERF_BIN" 2>/dev/null | grep -q "libaio.so.1 => not found"; then
+        echo "Missing libaio.so.1 in the guest image."
+        echo "Install libaio runtime or copy libaio.so.1 into the image and run ldconfig."
+        exit 1
+    fi
+
+    GLIBC_MISMATCH=$(ldd "$SPDK_PERF_BIN" 2>&1 | grep -E "GLIBC_[0-9]+" || true)
+    if [ -n "$GLIBC_MISMATCH" ]; then
+        echo "SPDK binary requires newer glibc than this guest provides."
+        if command -v getconf >/dev/null 2>&1; then
+            echo "Guest glibc: $(getconf GNU_LIBC_VERSION || true)"
+        fi
+        if command -v ldd >/dev/null 2>&1; then
+            echo "Guest ldd: $(ldd --version 2>/dev/null | head -n1 || true)"
+        fi
+        echo "Build spdk_nvme_perf inside Ubuntu 18.04 or copy a compatible binary via bake_disk_image.sh --copy-spdk-bin PATH."
+        echo "Details:"
+        echo "$GLIBC_MISMATCH"
+        exit 1
+    fi
+fi
+
 QUEUE_DEPTHS=(${QUEUE_DEPTHS_LIST:-"16 32 64 128"})
 IO_SIZES=(${IO_SIZES_LIST:-"4096 16384"})
 REPEATS=${REPEATS:-3}
@@ -130,6 +234,51 @@ STEADY_TIME=${STEADY_TIME:-30}
 
 core_mask_from_id() {
     printf "0x%x" "$((1 << $1))"
+}
+
+hugepages_total() {
+    if [ -r /proc/meminfo ]; then
+        local total
+        total=$(grep -E "^HugePages_Total:" /proc/meminfo | awk '{print $2}')
+        if [ -n "$total" ]; then
+            echo "$total"
+            return 0
+        fi
+    fi
+    if [ -r /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages ]; then
+        cat /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages
+        return 0
+    fi
+    echo "0"
+}
+
+cpu_online_list() {
+    if [ -r /sys/devices/system/cpu/online ]; then
+        cat /sys/devices/system/cpu/online
+    else
+        echo "0"
+    fi
+}
+
+cpu_id_is_online() {
+    local id="$1"
+    local online
+    online=$(cpu_online_list)
+    IFS=',' read -ra ranges <<< "$online"
+    for r in "${ranges[@]}"; do
+        if [[ "$r" == *-* ]]; then
+            local start=${r%-*}
+            local end=${r#*-}
+            if [ "$id" -ge "$start" ] && [ "$id" -le "$end" ]; then
+                return 0
+            fi
+        else
+            if [ "$id" -eq "$r" ]; then
+                return 0
+            fi
+        fi
+    done
+    return 1
 }
 
 read -a CORE_MASK_LIST <<< "$CORE_MASKS"
@@ -152,6 +301,10 @@ fi
 
 for CORE_IDX in "${!CORE_IDS[@]}"; do
     CORE_ID="${CORE_IDS[$CORE_IDX]}"
+    if ! cpu_id_is_online "$CORE_ID"; then
+        echo "Warning: requested CORE_ID=$CORE_ID is offline. Using core 0 instead." >&2
+        CORE_ID=0
+    fi
     if [ "${#CORE_MASK_LIST[@]}" -gt 0 ]; then
         CORE_MASK="${CORE_MASK_LIST[$CORE_IDX]:-${CORE_MASK_LIST[0]}}"
     elif [ "${#CORE_IDS[@]}" -eq 1 ] && [ -n "${CORE_MASK:-}" ]; then
@@ -188,7 +341,11 @@ for CORE_IDX in "${!CORE_IDS[@]}"; do
 
                     RUN_LOG="$LOG_DIR/run_s${IO_SIZE}_q${QD}_r${RUN_ID}.log"
                     # build SPDK commands
-                    SPDK_CMD_RUN=("$SPDK_PERF_BIN" -r "trtype:PCIe traddr:$PCI_ADDR" -w randread -o "$IO_SIZE" -q "$QD" -t "$STEADY_TIME" -c "$CORE_MASK" -P "$QPAIRS" -L --transport-stats)
+                    SPDK_EAL_ARGS=()
+                    if [ "$NO_HUGE" -eq 1 ] || [ "$(hugepages_total)" -eq 0 ]; then
+                        SPDK_EAL_ARGS+=(--no-huge)
+                    fi
+                    SPDK_CMD_RUN=("$SPDK_PERF_BIN" -r "trtype:PCIe traddr:$PCI_ADDR" -w randread -o "$IO_SIZE" -q "$QD" -t "$STEADY_TIME" -c "$CORE_MASK" -P "$QPAIRS" -L --transport-stats "${SPDK_EAL_ARGS[@]}")
 
                     # Set LD_LIBRARY_PATH for SPDK shared libraries
                     export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"$SPDK_DIR/build/lib"
@@ -207,6 +364,13 @@ for CORE_IDX in "${!CORE_IDS[@]}"; do
                     if [ $RC -ne 0 ] || ! echo "$CMD_OUTPUT" | grep -q "^Total"; then
                         echo "Error on IO_SIZE=$IO_SIZE QD=$QD Run=$RUN_ID (rc=$RC). Saved output: $RUN_LOG" | tee -a "$ERROR_LOG"
                         echo "$RUN_LOG" >> "$ERROR_LOG"
+                        if command -v ldd >/dev/null 2>&1; then
+                            {
+                                echo "---- ldd $SPDK_PERF_BIN ----"
+                                ldd "$SPDK_PERF_BIN" || true
+                                echo "---------------------------"
+                            } >> "$RUN_LOG"
+                        fi
                         continue
                     fi
 

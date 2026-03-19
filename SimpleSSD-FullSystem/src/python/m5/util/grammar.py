@@ -98,17 +98,23 @@ class Grammar(object):
             raise AttributeError(
                 "argument must be a string, was '%s'" % type(f))
 
-        import new
+        import ply.yacc
         lexer = self.lex.clone()
         lexer.input(data)
         self.lexers.append((lexer, source))
-        dict = {
+        inst_dict = {
             'productions' : self.yacc.productions,
             'action'      : self.yacc.action,
             'goto'        : self.yacc.goto,
             'errorfunc'   : self.yacc.errorfunc,
             }
-        parser = new.instance(ply.yacc.LRParser, dict)
+        try:
+            import new as _new
+            parser = _new.instance(ply.yacc.LRParser, inst_dict)
+        except ImportError:
+            # Python 3: all classes are new-style and support __new__
+            parser = ply.yacc.LRParser.__new__(ply.yacc.LRParser)
+            parser.__dict__.update(inst_dict)
         result = parser.parse(lexer=lexer, debug=debug, tracking=tracking)
         self.lexers.pop()
         return result
@@ -117,7 +123,7 @@ class Grammar(object):
         if isinstance(f, string_types):
             source = f
             f = open(f, 'r')
-        elif isinstance(f, file):
+        elif hasattr(f, 'read'):
             source = f.name
         else:
             raise AttributeError(

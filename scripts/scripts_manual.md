@@ -7,6 +7,11 @@ This document summarizes each shell script in this folder and provides a complet
 - bake_disk_image.sh
   - Mounts the gem5 disk image and copies the host repo into the guest image under /root/SimpleSSD_Gem5_simulation.
   - Requires root/sudo.
+  - Uses rsync with default excludes to fit the 2GB image; add --exclude to skip more paths (the disk image itself is excluded).
+
+- resize_disk_image.sh
+  - Resizes the disk image and expands the partition/filesystem.
+  - Requires qemu-img and root/sudo.
 
 - boot_gem5.sh
   - Starts, stops, or checks status of the gem5 full-system simulation on the host.
@@ -41,6 +46,14 @@ This document summarizes each shell script in this folder and provides a complet
 ## End-to-End Workflow (Baked Image)
 
 This workflow assumes you have root/sudo access and want to avoid host file sharing.
+
+0) (Optional) Grow the disk image if you need more space
+
+- From the repo root:
+
+  ./scripts/resize_disk_image.sh \
+    --disk-image ./assets/x86-ubuntu.img \
+    --size 8G
 
 1) Bake the repo into the disk image (root required)
 
@@ -94,5 +107,6 @@ This workflow assumes you have root/sudo access and want to avoid host file shar
 ## Notes
 
 - Use readfile mode (default) for deterministic, boot-time execution.
+- If the repo is not baked into the disk image, use virtio-9p sharing: run driver_phase1.sh with --vio-9p 1 (or rely on the default --auto-9p 1) and ensure diod is installed on the host.
 - If the repo or SPDK binaries change, re-run bake_disk_image.sh before the next run.
 - If you want to run the bdev-only sweep instead, use driver_bdev.sh and then extract results from results/bdev_data/ inside the guest image.

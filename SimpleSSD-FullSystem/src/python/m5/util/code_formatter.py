@@ -113,6 +113,7 @@ class code_formatter_meta(type):
         cls.pattern = re.compile(pat, re.VERBOSE | re.DOTALL | re.MULTILINE)
 
 class code_formatter(object):
+
     __metaclass__ = code_formatter_meta
 
     delim = r'$'
@@ -164,7 +165,7 @@ class code_formatter(object):
         f.close()
 
     def __str__(self):
-        data = string.join(self._data, '')
+        data = ''.join(self._data)
         self._data = [ data ]
         return data
 

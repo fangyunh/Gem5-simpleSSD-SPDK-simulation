@@ -426,6 +426,9 @@ def addFSOptions(parser):
             help="Stores changed frame buffers from the VNC server to compressed "\
             "files in the gem5 output directory")
 
+    if buildEnv['TARGET_ISA'] != "arm":
+        parser.add_option("--vio-9p", action="store_true", help=vio_9p_help)
+
     if buildEnv['TARGET_ISA'] == "arm":
         parser.add_option("--bare-metal", action="store_true",
                    help="Provide the raw system without the linux specific bits")

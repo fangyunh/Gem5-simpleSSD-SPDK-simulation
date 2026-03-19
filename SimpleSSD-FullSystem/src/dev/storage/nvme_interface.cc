@@ -259,8 +259,12 @@ Tick NVMeInterface::writeConfig(PacketPtr pkt) {
       pxcap.pxdc2 = pkt->getLE<uint32_t>();
     }
     else {
-      SimpleSSD::panic(
-          "nvme_interface: Invalid PCI config write offset: %#x size: %d",
+      // Silently ignore writes to unimplemented PCI config registers
+      // (e.g. VFIO probes Slot Control, Link Control 2, etc. during bind).
+      // Use warn instead of panic so the simulation continues.
+      SimpleSSD::warn(
+          "nvme_interface: Ignoring PCI config write to unimplemented offset:"
+          " %#x size: %d",
           offset, size);
     }
 

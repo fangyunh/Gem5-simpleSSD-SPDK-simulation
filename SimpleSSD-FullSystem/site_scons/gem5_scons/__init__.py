@@ -83,10 +83,10 @@ class Transform(object):
         def strip(f):
             return strip_build_path(str(f), env)
         if len(source) > 0:
-            srcs = map(strip, source)
+            srcs = list(map(strip, source))
         else:
             srcs = ['']
-        tgts = map(strip, target)
+        tgts = list(map(strip, target))
         # surprisingly, os.path.commonprefix is a dumb char-by-char string
         # operation that has nothing to do with paths.
         com_pfx = os.path.commonprefix(srcs + tgts)

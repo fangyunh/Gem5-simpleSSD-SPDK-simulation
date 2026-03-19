@@ -43,6 +43,7 @@ from __future__ import print_function
 from __future__ import absolute_import
 
 import m5
+import os
 from m5.objects import *
 from m5.util import *
 from .Benchmarks import *
@@ -68,6 +69,13 @@ class CowIdeDisk(IdeDisk):
     def childImage(self, ci):
         self.image.child.image_file = ci
 
+
+class RawIdeDisk(IdeDisk):
+    image = RawDiskImage(read_only=False)
+
+    def childImage(self, ci):
+        self.image.image_file = ci
+
 class MemBus(SystemXBar):
     badaddr_responder = BadAddr()
     default = Self.badaddr_responder.pio
@@ -83,7 +91,21 @@ def attach_9p(parent, bus):
     if os.path.exists(viopci.vio.socketPath):
         os.remove(viopci.vio.socketPath)
     parent.viopci = viopci
-    parent.attachPciDevice(viopci, bus)
+
+    try:
+        parent.attachPciDevice(viopci, bus)
+        return
+    except AttributeError:
+        pass
+
+    # X86 Pc platform lacks attachPciDevice; wire PCI fields manually.
+    viopci.pci_bus = 0
+    viopci.pci_dev = 7
+    viopci.pci_func = 0
+    viopci.InterruptLine = 19
+    viopci.InterruptPin = 1
+    viopci.pio = bus.master
+    viopci.dma = bus.slave
 
 def fillInCmdline(mdesc, template, **kwargs):
     kwargs.setdefault('rootdev', mdesc.rootdev())
@@ -93,8 +115,9 @@ def fillInCmdline(mdesc, template, **kwargs):
 
 def makeCowDisks(disk_paths):
     disks = []
+    disable_cow = os.environ.get("GEM5_DISABLE_COW", "0").lower() in ("1", "true", "yes")
     for disk_path in disk_paths:
-        disk = CowIdeDisk(driveID='master')
+        disk = RawIdeDisk(driveID='master') if disable_cow else CowIdeDisk(driveID='master')
         disk.childImage(disk_path);
         disks.append(disk)
     return disks
@@ -663,9 +686,18 @@ def makeX86System(mem_mode, simplessd, numCPUs=1, mdesc=None, self=None,
             source_bus_irq = 0 + (6 << 2),
             dest_io_apic_id = io_apic.id,
             dest_io_apic_intin = 18)
+    pci_dev7_inta = X86IntelMPIOIntAssignment(
+            interrupt_type = 'INT',
+            polarity = 'ConformPolarity',
+            trigger = 'ConformTrigger',
+            source_bus_id = 0,
+            source_bus_irq = 0 + (7 << 2),
+            dest_io_apic_id = io_apic.id,
+            dest_io_apic_intin = 19)
     base_entries.append(pci_dev4_inta)
     base_entries.append(pci_dev5_inta)
     base_entries.append(pci_dev6_inta)
+    base_entries.append(pci_dev7_inta)
     def assignISAInt(irq, apicPin):
         assign_8259_to_apic = X86IntelMPIOIntAssignment(
                 interrupt_type = 'ExtInt',

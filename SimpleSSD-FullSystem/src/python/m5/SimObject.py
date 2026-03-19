@@ -1079,9 +1079,9 @@ class SimObjectCliWrapper(object):
 # the code in this class deals with the configuration hierarchy itself
 # (parent/child node relationships).
 class SimObject(object):
+    __metaclass__ = MetaSimObject
     # Specify metaclass.  Any class inheriting from SimObject will
     # get this metaclass.
-    __metaclass__ = MetaSimObject
     type = 'SimObject'
     abstract = True
 

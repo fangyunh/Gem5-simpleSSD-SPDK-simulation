@@ -239,6 +239,7 @@ class ParamDesc(object):
 # single value.
 
 class VectorParamValue(list):
+
     __metaclass__ = MetaParamValue
     def __setattr__(self, attr, value):
         raise AttributeError("Not allowed to set %s on '%s'" % \

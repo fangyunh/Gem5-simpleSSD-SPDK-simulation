@@ -49,4 +49,8 @@ def ignore_style():
     return SCons.Script.GetOption('ignore_style') or not sys.stdin.isatty()
 
 def get_termcap():
-    return m5.util.terminal.get_termcap(SCons.Script.GetOption('use_colors'))
+    try:
+        use_colors = SCons.Script.GetOption('use_colors')
+    except AttributeError:
+        use_colors = None
+    return m5.util.terminal.get_termcap(use_colors)

@@ -69,7 +69,7 @@ class Test(object):
         self.build_dir = build_dir
         self.props = {}
 
-        for key, val in props.iteritems():
+        for key, val in props.items():
             self.set_prop(key, val)
 
     def set_prop(self, key, val):
@@ -112,6 +112,7 @@ class TestPhaseMeta(type):
         super(TestPhaseMeta, cls).__init__(name, bases, d)
 
 class TestPhaseBase(object):
+
     __metaclass__ = TestPhaseMeta
     abstract = True
 
@@ -174,7 +175,7 @@ class RunPhase(TestPhaseBase):
                 os.makedirs(test.m5out_dir())
             try:
                 subprocess.check_call(cmd, cwd=os.path.dirname(test.dir()))
-            except subprocess.CalledProcessError, error:
+            except subprocess.CalledProcessError as error:
                 returncode = error.returncode
             else:
                 returncode = 0
@@ -373,7 +374,7 @@ class VerifyPhase(TestPhaseBase):
             'passed': map(lambda t: t.props, self._passed),
             'failed': {
                 cause: map(lambda t: t.props, tests) for
-                       cause, tests in self._failed.iteritems()
+                       cause, tests in self._failed.items()
             }
         }
         with open(path, 'w') as rf:
@@ -571,7 +572,7 @@ with open(json_path) as f:
 
     filtered_tests = {
         target: props for (target, props) in
-                    test_data.iteritems() if eval(filt, dict(props))
+                    test_data.items() if eval(filt, dict(props))
     }
 
     if len(filtered_tests) == 0:
@@ -579,15 +580,15 @@ with open(json_path) as f:
         exit()
 
     if main_args.list:
-        for target, props in sorted(filtered_tests.iteritems()):
+        for target, props in sorted(filtered_tests.items()):
             print('%s.%s' % (target, main_args.flavor))
-            for key, val in props.iteritems():
+            for key, val in props.items():
                 print('    %s: %s' % (key, val))
         print('Total tests: %d' % len(filtered_tests))
     else:
         tests_to_run = list([
             Test(target, main_args.flavor, main_args.build_dir, props) for
-                target, props in sorted(filtered_tests.iteritems())
+                target, props in sorted(filtered_tests.items())
         ])
 
         for phase in phases:

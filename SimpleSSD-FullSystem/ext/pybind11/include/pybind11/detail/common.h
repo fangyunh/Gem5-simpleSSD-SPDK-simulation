@@ -132,6 +132,7 @@
 #endif
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <forward_list>
 #include <vector>
@@ -141,6 +142,7 @@
 #include <unordered_map>
 #include <memory>
 #include <typeindex>
+#include <typeinfo>
 #include <type_traits>
 
 #if PY_MAJOR_VERSION >= 3 /// Compatibility macros for various Python versions

@@ -54,14 +54,14 @@ class CodeImporter(object):
         # when the importer module was loaded and CodeImporter was
         # defined are not available when load_module is actually
         # called. Soooo, the imports must live here.
-        import imp
+        import types
         import os
         import sys
 
         try:
             mod = sys.modules[fullname]
         except KeyError:
-            mod = imp.new_module(fullname)
+            mod = types.ModuleType(fullname)
             sys.modules[fullname] = mod
 
         try:

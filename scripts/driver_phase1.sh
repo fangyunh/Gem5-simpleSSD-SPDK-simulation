@@ -27,10 +27,13 @@ CONSOLE=0
 RUN_PHASE1=0
 STOP=0
 AUTO=0
-AUTO_STOP=0
+AUTO_STOP=1
 USE_READFILE=1
+PREFLIGHT=1
+PREFLIGHT_MOUNT_DIR="/mnt/gem5_img"
+DISABLE_COW=1
 
-CORES="1"
+CORES="0"
 CORE_MASKS=""
 QPAIRS="1"
 QD_LIST="16 32 64 128"
@@ -43,11 +46,12 @@ RUN_TAG="phase1_run_$(date +%Y%m%d_%H%M%S)"
 PCI_ADDR="0000:02:00.0"
 PCI_CHECK=0
 PERF_ENABLE=1
-SKIP_SETUP=1
-HUGEMEM_MB=2048
+SKIP_SETUP=0
+HUGEMEM_MB=1024
 
-# host share for virtio-9p (readfile mode)
+# host share for virtio-9p (readfile mode), auto-enabled by default
 VIO_9P=0
+AUTO_VIO_9P=1
 HOST_SHARE="$ROOT_DIR"
 
 # gem5 boot args (for metadata only; overrides boot_gem5.sh if set)
@@ -66,7 +70,7 @@ SESSION_NAME="phase1_auto"
 GUEST_WAIT=20
 GUEST_CWD=""
 TAIL_LOG=1
-GUEST_OUTPUT_ROOT="results/phase1_runs"
+GUEST_OUTPUT_ROOT="/root/SimpleSSD_Gem5_simulation/results/phase1_runs"
 GUEST_REPO="/root/SimpleSSD_Gem5_simulation"
 GUEST_REPO_CANDIDATES="/root/SimpleSSD_Gem5_simulation /home/root/SimpleSSD_Gem5_simulation /home/ubuntu/SimpleSSD_Gem5_simulation /mnt/host/SimpleSSD_Gem5_simulation /mnt/9p/SimpleSSD_Gem5_simulation"
 WAIT_FOR_REGEX="login:|# "
@@ -100,6 +104,7 @@ Options:
   --skip-setup 0|1        Skip SPDK setup.sh (default: $SKIP_SETUP)
   --hugemem-mb N          Hugepage MB (default: $HUGEMEM_MB)
   --vio-9p 0|1            Enable virtio-9p share (default: $VIO_9P)
+  --auto-9p 0|1           Auto-enable virtio-9p for readfile mode (default: $AUTO_VIO_9P)
   --host-share PATH       Host path to share via virtio-9p (default: $HOST_SHARE)
 
   --kernel PATH           Kernel path for metadata/boot override
@@ -119,11 +124,31 @@ Options:
   --wait-for REGEX        Wait for console log regex before sending commands
   --wait-timeout N        Max seconds to wait for regex (default: $WAIT_TIMEOUT)
   --use-readfile 0|1      Use gem5 readfile script (default: $USE_READFILE)
+  --disable-cow 0|1       Disable COW disk overlay (default: $DISABLE_COW)
+  --preflight 0|1         Preflight check for baked repo in disk image (default: $PREFLIGHT)
+  --preflight-mount PATH  Temporary mount point for preflight (default: $PREFLIGHT_MOUNT_DIR)
   --no-tail               Do not tail the combined log
 
 Examples:
   $0 --auto --cores "2" --qpairs "1" --qd "16" --ios "4096" --repeats 1 --tag phase1_smoke
 EOF
+}
+
+TMUX_BIN="${TMUX_BIN:-}"
+if [ -z "$TMUX_BIN" ]; then
+  if [ -x /usr/bin/tmux ]; then
+    TMUX_BIN="/usr/bin/tmux"
+  else
+    TMUX_BIN="$(command -v tmux || true)"
+  fi
+fi
+
+tmux_cmd() {
+  if [ -z "$TMUX_BIN" ]; then
+    return 127
+  fi
+  # Avoid conda's libtinfo mismatch when tmux is started from this shell.
+  env -u LD_LIBRARY_PATH "$TMUX_BIN" "$@"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -148,6 +173,7 @@ while [[ $# -gt 0 ]]; do
     --skip-setup) SKIP_SETUP="$2"; shift 2 ;;
     --hugemem-mb) HUGEMEM_MB="$2"; shift 2 ;;
     --vio-9p) VIO_9P="$2"; shift 2 ;;
+    --auto-9p) AUTO_VIO_9P="$2"; shift 2 ;;
     --host-share) HOST_SHARE="$2"; shift 2 ;;
     --kernel) KERNEL="$2"; shift 2 ;;
     --disk-image) DISK_IMAGE="$2"; shift 2 ;;
@@ -165,6 +191,9 @@ while [[ $# -gt 0 ]]; do
     --wait-for) WAIT_FOR_REGEX="$2"; shift 2 ;;
     --wait-timeout) WAIT_TIMEOUT="$2"; shift 2 ;;
     --use-readfile) USE_READFILE="$2"; shift 2 ;;
+    --disable-cow) DISABLE_COW="$2"; shift 2 ;;
+    --preflight) PREFLIGHT="$2"; shift 2 ;;
+    --preflight-mount) PREFLIGHT_MOUNT_DIR="$2"; shift 2 ;;
     --no-tail) TAIL_LOG=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
@@ -173,6 +202,25 @@ done
 
 if [ "$ORIGINAL_ARGC" -eq 0 ]; then
   AUTO=1
+fi
+
+AUTO_VIO_9P_NOTICE=0
+if [ "$USE_READFILE" -eq 1 ] && [ "$AUTO_VIO_9P" -eq 1 ] && [ "$VIO_9P" -eq 0 ]; then
+  if [ -n "$HOST_SHARE" ] && [ -d "$HOST_SHARE" ]; then
+    VIO_9P=1
+    AUTO_VIO_9P_NOTICE=1
+  fi
+fi
+
+# In 9p mode, default the repo and outputs to the shared mount.
+# HOST_SHARE (e.g. .../SimpleSSD_Gem5_simulation) is exported as the diod
+# root and mounted at /mnt/9p in the guest, so the repo root IS /mnt/9p
+# (not /mnt/9p/SimpleSSD_Gem5_simulation).
+if [ "$VIO_9P" -eq 1 ]; then
+  GUEST_REPO="/mnt/9p"
+  GUEST_REPO_CANDIDATES="/mnt/9p /mnt/9p/SimpleSSD_Gem5_simulation $GUEST_REPO_CANDIDATES"
+  GUEST_OUTPUT_ROOT="/mnt/9p/results"
+  PREFLIGHT=0
 fi
 
 LOG_DIR_HOST="$ROOT_DIR/logs"
@@ -198,6 +246,7 @@ write_metadata() {
   "skip_setup": $SKIP_SETUP,
   "hugemem_mb": $HUGEMEM_MB,
   "vio_9p": $VIO_9P,
+  "auto_vio_9p": $AUTO_VIO_9P,
   "host_share": "$HOST_SHARE",
   "gem5": {
     "kernel": "$KERNEL",
@@ -230,6 +279,7 @@ write_log_header() {
     echo "skip_setup: $SKIP_SETUP"
     echo "hugemem_mb: $HUGEMEM_MB"
     echo "vio_9p: $VIO_9P"
+    echo "auto_vio_9p: $AUTO_VIO_9P"
     echo "host_share: $HOST_SHARE"
     echo "session_name: $SESSION_NAME"
     echo "console: ${CONSOLE_HOST}:${CONSOLE_PORT}"
@@ -240,10 +290,96 @@ write_log_header() {
     echo "use_readfile: $USE_READFILE"
     echo "guest_repo: $GUEST_REPO"
     echo "guest_repo_candidates: $GUEST_REPO_CANDIDATES"
+    echo "disable_cow: $DISABLE_COW"
+    echo "preflight: $PREFLIGHT"
+    echo "preflight_mount: $PREFLIGHT_MOUNT_DIR"
     echo "metadata_file: $META_FILE"
     echo "log_file: $LOG_FILE"
     echo "========================================================"
   } | tee -a "$LOG_FILE"
+}
+
+preflight_disk_image() {
+  if [ ! -f "$DISK_IMAGE" ]; then
+    echo "Preflight ERROR: disk image not found: $DISK_IMAGE" | tee -a "$LOG_FILE"
+    return 1
+  fi
+
+  if ! command -v losetup >/dev/null 2>&1; then
+    echo "Preflight ERROR: losetup not available on host." | tee -a "$LOG_FILE"
+    return 1
+  fi
+
+  local sudo_cmd=""
+  if [ "$EUID" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo_cmd="sudo"
+    else
+      echo "Preflight ERROR: sudo not found and not running as root." | tee -a "$LOG_FILE"
+      return 1
+    fi
+  fi
+
+  local loop_dev=""
+  local mount_src=""
+  local repo_found=""
+
+  $sudo_cmd mkdir -p "$PREFLIGHT_MOUNT_DIR"
+
+  cleanup_preflight() {
+    set +e
+    if mountpoint -q "$PREFLIGHT_MOUNT_DIR"; then
+      $sudo_cmd umount "$PREFLIGHT_MOUNT_DIR"
+    fi
+    if [ -n "$loop_dev" ]; then
+      $sudo_cmd losetup -d "$loop_dev" >/dev/null 2>&1 || true
+    fi
+  }
+
+  loop_dev=$($sudo_cmd losetup --find --show --partscan "$DISK_IMAGE")
+  mount_src="$loop_dev"
+  if [ -b "${loop_dev}p1" ]; then
+    mount_src="${loop_dev}p1"
+  fi
+
+  echo "Preflight INFO: loop_dev=$loop_dev mount_src=$mount_src" | tee -a "$LOG_FILE"
+
+  if ! $sudo_cmd mount "$mount_src" "$PREFLIGHT_MOUNT_DIR"; then
+    cleanup_preflight
+    echo "Preflight ERROR: failed to mount disk image." | tee -a "$LOG_FILE"
+    return 1
+  fi
+
+  echo "Preflight INFO: mounted at $PREFLIGHT_MOUNT_DIR" | tee -a "$LOG_FILE"
+  $sudo_cmd ls -la "$PREFLIGHT_MOUNT_DIR" | sed 's/^/  /' | tee -a "$LOG_FILE"
+  $sudo_cmd ls -la "$PREFLIGHT_MOUNT_DIR/root" 2>/dev/null | sed 's/^/  /' | tee -a "$LOG_FILE"
+  $sudo_cmd ls -la "$PREFLIGHT_MOUNT_DIR/$GUEST_REPO" 2>/dev/null | sed 's/^/  /' | tee -a "$LOG_FILE"
+  $sudo_cmd ls -la "$PREFLIGHT_MOUNT_DIR/$GUEST_REPO/scripts/phase1_run.sh" 2>/dev/null | sed 's/^/  /' | tee -a "$LOG_FILE"
+
+  if $sudo_cmd test -d "$PREFLIGHT_MOUNT_DIR/$GUEST_REPO" 2>/dev/null && \
+     $sudo_cmd test -f "$PREFLIGHT_MOUNT_DIR/$GUEST_REPO/scripts/phase1_run.sh" 2>/dev/null; then
+    repo_found="$GUEST_REPO"
+  else
+    for p in $GUEST_REPO_CANDIDATES; do
+      if $sudo_cmd test -d "$PREFLIGHT_MOUNT_DIR/$p" 2>/dev/null && \
+         $sudo_cmd test -f "$PREFLIGHT_MOUNT_DIR/$p/scripts/phase1_run.sh" 2>/dev/null; then
+        repo_found="$p"
+        break
+      fi
+    done
+  fi
+
+  cleanup_preflight
+
+  if [ -z "$repo_found" ]; then
+    echo "Preflight ERROR: repo not found in disk image." | tee -a "$LOG_FILE"
+    echo "Checked: $GUEST_REPO $GUEST_REPO_CANDIDATES" | tee -a "$LOG_FILE"
+    echo "Suggestion: re-run bake_disk_image.sh or enable virtio-9p." | tee -a "$LOG_FILE"
+    return 1
+  fi
+
+  echo "Preflight OK: repo found in disk image at $repo_found" | tee -a "$LOG_FILE"
+  return 0
 }
 
 wait_for_console() {
@@ -253,8 +389,8 @@ wait_for_console() {
   local target="$SESSION_NAME:0.1"
 
   while [ "$waited" -lt "$timeout" ]; do
-    if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-      if tmux capture-pane -pt "$target" -S -2000 | grep -E -q "$regex"; then
+    if tmux_cmd has-session -t "$SESSION_NAME" 2>/dev/null; then
+      if tmux_cmd capture-pane -pt "$target" -S -2000 | grep -E -q "$regex"; then
         return 0
       fi
     fi
@@ -267,24 +403,24 @@ wait_for_console() {
 send_guest_cmds() {
   local target="$SESSION_NAME:0.1"
   if [ -n "$GUEST_CWD" ]; then
-    tmux send-keys -t "$target" "cd $GUEST_CWD" C-m
+    tmux_cmd send-keys -t "$target" "cd $GUEST_CWD" C-m
   fi
-  tmux send-keys -t "$target" "if [ -d '$GUEST_REPO' ] && [ -f '$GUEST_REPO/scripts/phase1_run.sh' ]; then cd '$GUEST_REPO'; else for p in $GUEST_REPO_CANDIDATES; do if [ -f \"\$p/scripts/phase1_run.sh\" ]; then cd \"\$p\"; break; fi; done; fi" C-m
-  tmux send-keys -t "$target" "export CORE_IDS=\"$CORES\"" C-m
-  tmux send-keys -t "$target" "export CORE_MASKS=\"$CORE_MASKS\"" C-m
-  tmux send-keys -t "$target" "export QPAIRS_LIST=\"$QPAIRS\"" C-m
-  tmux send-keys -t "$target" "export QUEUE_DEPTHS_LIST=\"$QD_LIST\"" C-m
-  tmux send-keys -t "$target" "export IO_SIZES_LIST=\"$IO_SIZES\"" C-m
-  tmux send-keys -t "$target" "export REPEATS=$REPEATS" C-m
-  tmux send-keys -t "$target" "export STEADY_TIME=$STEADY_TIME" C-m
-  tmux send-keys -t "$target" "export RUN_TAG=\"$RUN_TAG\"" C-m
-  tmux send-keys -t "$target" "export OUTPUT_ROOT=\"$GUEST_OUTPUT_ROOT\"" C-m
-  tmux send-keys -t "$target" "export PCI_ADDR=\"$PCI_ADDR\"" C-m
-  tmux send-keys -t "$target" "export PCI_CHECK=$PCI_CHECK" C-m
-  tmux send-keys -t "$target" "export PERF_ENABLE=$PERF_ENABLE" C-m
-  tmux send-keys -t "$target" "export SKIP_SETUP=$SKIP_SETUP" C-m
-  tmux send-keys -t "$target" "export HUGEMEM_MB=$HUGEMEM_MB" C-m
-  tmux send-keys -t "$target" "./scripts/phase1_run.sh" C-m
+  tmux_cmd send-keys -t "$target" "if [ -d '$GUEST_REPO' ] && [ -f '$GUEST_REPO/scripts/phase1_run.sh' ]; then cd '$GUEST_REPO'; else for p in $GUEST_REPO_CANDIDATES; do if [ -f \"\$p/scripts/phase1_run.sh\" ]; then cd \"\$p\"; break; fi; done; fi" C-m
+  tmux_cmd send-keys -t "$target" "export CORE_IDS=\"$CORES\"" C-m
+  tmux_cmd send-keys -t "$target" "export CORE_MASKS=\"$CORE_MASKS\"" C-m
+  tmux_cmd send-keys -t "$target" "export QPAIRS_LIST=\"$QPAIRS\"" C-m
+  tmux_cmd send-keys -t "$target" "export QUEUE_DEPTHS_LIST=\"$QD_LIST\"" C-m
+  tmux_cmd send-keys -t "$target" "export IO_SIZES_LIST=\"$IO_SIZES\"" C-m
+  tmux_cmd send-keys -t "$target" "export REPEATS=$REPEATS" C-m
+  tmux_cmd send-keys -t "$target" "export STEADY_TIME=$STEADY_TIME" C-m
+  tmux_cmd send-keys -t "$target" "export RUN_TAG=\"$RUN_TAG\"" C-m
+  tmux_cmd send-keys -t "$target" "export OUTPUT_ROOT=\"$GUEST_OUTPUT_ROOT\"" C-m
+  tmux_cmd send-keys -t "$target" "export PCI_ADDR=\"$PCI_ADDR\"" C-m
+  tmux_cmd send-keys -t "$target" "export PCI_CHECK=$PCI_CHECK" C-m
+  tmux_cmd send-keys -t "$target" "export PERF_ENABLE=$PERF_ENABLE" C-m
+  tmux_cmd send-keys -t "$target" "export SKIP_SETUP=$SKIP_SETUP" C-m
+  tmux_cmd send-keys -t "$target" "export HUGEMEM_MB=$HUGEMEM_MB" C-m
+  tmux_cmd send-keys -t "$target" "./scripts/phase1_run.sh" C-m
 }
 
 write_readfile_script() {
@@ -306,8 +442,45 @@ HOST_SHARE="__HOST_SHARE__"
   echo "PHASE1_RUNSCRIPT_INFO: ls /mnt"
   ls -la /mnt 2>/dev/null | sed 's/^/  /'
 
-  if [ -n "$HOST_SHARE" ] && [ -d /mnt/9p ] && ! mountpoint -q /mnt/9p 2>/dev/null; then
-    mount -t 9p -o trans=virtio,version=9p2000.L,aname="$HOST_SHARE" gem5 /mnt/9p 2>/dev/null || true
+  if [ -n "$HOST_SHARE" ]; then
+    mkdir -p /mnt/9p
+    if mountpoint -q /mnt/9p 2>/dev/null; then
+      echo "PHASE1_RUNSCRIPT_INFO: /mnt/9p already mounted"
+    else
+      mount_ok=0
+
+      echo "PHASE1_RUNSCRIPT_INFO: trying 9p mount with aname=$HOST_SHARE"
+      if mount -t 9p -o trans=virtio,version=9p2000.L,aname="$HOST_SHARE" gem5 /mnt/9p; then
+        mount_ok=1
+        echo "PHASE1_RUNSCRIPT_INFO: /mnt/9p mounted with aname=$HOST_SHARE"
+      else
+        echo "PHASE1_RUNSCRIPT_WARN: mount attempt failed (aname=$HOST_SHARE)"
+      fi
+
+      if [ "$mount_ok" -eq 0 ]; then
+        echo "PHASE1_RUNSCRIPT_INFO: trying 9p mount with aname=/"
+        if mount -t 9p -o trans=virtio,version=9p2000.L,aname=/ gem5 /mnt/9p; then
+          mount_ok=1
+          echo "PHASE1_RUNSCRIPT_INFO: /mnt/9p mounted with aname=/"
+        else
+          echo "PHASE1_RUNSCRIPT_WARN: mount attempt failed (aname=/)"
+        fi
+      fi
+
+      if [ "$mount_ok" -eq 0 ]; then
+        echo "PHASE1_RUNSCRIPT_INFO: trying 9p mount without aname"
+        if mount -t 9p -o trans=virtio,version=9p2000.L gem5 /mnt/9p; then
+          mount_ok=1
+          echo "PHASE1_RUNSCRIPT_INFO: /mnt/9p mounted without aname"
+        else
+          echo "PHASE1_RUNSCRIPT_WARN: mount attempt failed (no aname)"
+        fi
+      fi
+
+      if [ "$mount_ok" -eq 0 ]; then
+        echo "PHASE1_RUNSCRIPT_WARN: failed to mount /mnt/9p from $HOST_SHARE"
+      fi
+    fi
   fi
 
   find_repo() {
@@ -350,6 +523,11 @@ export PERF_ENABLE=__PERF_ENABLE__
 export SKIP_SETUP=__SKIP_SETUP__
 export HUGEMEM_MB=__HUGEMEM_MB__
   ./scripts/phase1_run.sh
+  echo "PHASE1_RUNSCRIPT_INFO: output_root=$OUTPUT_ROOT"
+  ls -la "$OUTPUT_ROOT" 2>/dev/null | sed 's/^/  /'
+  ls -la "$OUTPUT_ROOT/$RUN_TAG" 2>/dev/null | sed 's/^/  /'
+  sync
+  sleep 2
   echo "PHASE1_RUNSCRIPT_DONE"
 } 2>&1 | tee "$LOG_FILE"
 
@@ -391,12 +569,12 @@ EOF
 }
 
 run_auto() {
-  if ! command -v tmux >/dev/null 2>&1; then
+  if [ -z "$TMUX_BIN" ]; then
     echo "tmux not found. Install tmux or run with manual options." >&2
     exit 1
   fi
 
-  if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+  if tmux_cmd has-session -t "$SESSION_NAME" 2>/dev/null; then
     echo "tmux session already exists: $SESSION_NAME" >&2
     exit 1
   fi
@@ -404,20 +582,30 @@ run_auto() {
   write_metadata
   write_log_header
 
+  if [ "$PREFLIGHT" -eq 1 ] && [ "$USE_READFILE" -eq 1 ] && [ "$VIO_9P" -eq 0 ]; then
+    if ! preflight_disk_image; then
+      echo "Preflight failed. Aborting before gem5 boot." | tee -a "$LOG_FILE"
+      exit 1
+    fi
+  fi
+
   if [ "$USE_READFILE" -eq 1 ]; then
     READFILE_SCRIPT=$(write_readfile_script)
-    tmux new-session -d -s "$SESSION_NAME" -n boot "bash -lc \"KERNEL=$KERNEL DISK_IMAGE=$DISK_IMAGE MEM_SIZE=$MEM_SIZE SSD_CONFIG=$SSD_CONFIG CHECKPOINT_DIR=$CHECKPOINT_DIR READFILE_SCRIPT=$READFILE_SCRIPT VIO_9P=$VIO_9P HOST_SHARE='$HOST_SHARE' $SCRIPT_DIR/boot_gem5.sh start; echo 'boot_gem5.sh exited'; exec bash\""
+    tmux_cmd new-session -d -s "$SESSION_NAME" -n boot "bash -lc \"KERNEL=$KERNEL DISK_IMAGE=$DISK_IMAGE MEM_SIZE=$MEM_SIZE SSD_CONFIG=$SSD_CONFIG CHECKPOINT_DIR=$CHECKPOINT_DIR READFILE_SCRIPT=$READFILE_SCRIPT VIO_9P=$VIO_9P VIO_9P_SET_ROOT=$VIO_9P HOST_SHARE='$HOST_SHARE' GEM5_DISABLE_COW=$DISABLE_COW $SCRIPT_DIR/boot_gem5.sh start; echo 'boot_gem5.sh exited'; exec bash\""
   else
-    tmux new-session -d -s "$SESSION_NAME" -n boot "bash -lc \"KERNEL=$KERNEL DISK_IMAGE=$DISK_IMAGE MEM_SIZE=$MEM_SIZE SSD_CONFIG=$SSD_CONFIG CHECKPOINT_DIR=$CHECKPOINT_DIR VIO_9P=$VIO_9P HOST_SHARE='$HOST_SHARE' $SCRIPT_DIR/boot_gem5.sh start; echo 'boot_gem5.sh exited'; exec bash\""
+    tmux_cmd new-session -d -s "$SESSION_NAME" -n boot "bash -lc \"KERNEL=$KERNEL DISK_IMAGE=$DISK_IMAGE MEM_SIZE=$MEM_SIZE SSD_CONFIG=$SSD_CONFIG CHECKPOINT_DIR=$CHECKPOINT_DIR VIO_9P=$VIO_9P VIO_9P_SET_ROOT=$VIO_9P HOST_SHARE='$HOST_SHARE' GEM5_DISABLE_COW=$DISABLE_COW $SCRIPT_DIR/boot_gem5.sh start; echo 'boot_gem5.sh exited'; exec bash\""
   fi
-  tmux pipe-pane -t "$SESSION_NAME:0.0" -o "cat >> '$LOG_FILE'"
-  tmux set-option -t "$SESSION_NAME" remain-on-exit on
+  tmux_cmd pipe-pane -t "$SESSION_NAME:0.0" -o "cat >> '$LOG_FILE'"
+  tmux_cmd set-option -t "$SESSION_NAME" remain-on-exit on
 
-  tmux split-window -t "$SESSION_NAME:0.0" -v "bash -lc \"while true; do $SCRIPT_DIR/console_gem5.sh $CONSOLE_PORT $CONSOLE_HOST && break; echo 'console exited, retrying in 2s'; sleep 2; done; exec bash\""
-  tmux pipe-pane -t "$SESSION_NAME:0.1" -o "cat >> '$LOG_FILE'"
+  tmux_cmd split-window -t "$SESSION_NAME:0.0" -v "bash -lc \"while true; do PORT=$CONSOLE_PORT; DETECTED=\\\$(grep -oE 'Listening for connections on port [0-9]+' '$ROOT_DIR/logs/gem5.out' 2>/dev/null | tail -n1 | awk '{print \\\$NF}'); if [ -n \\\"\\\$DETECTED\\\" ]; then PORT=\\\$DETECTED; fi; $SCRIPT_DIR/console_gem5.sh \\\"\\\$PORT\\\" $CONSOLE_HOST && break; echo 'console exited, retrying in 2s'; sleep 2; done; exec bash\""
+  tmux_cmd pipe-pane -t "$SESSION_NAME:0.1" -o "cat >> '$LOG_FILE'"
 
   echo "Auto mode: tmux session '$SESSION_NAME' created." | tee -a "$LOG_FILE"
   echo "Tailing combined log in this terminal." | tee -a "$LOG_FILE"
+  if [ "$AUTO_VIO_9P_NOTICE" -eq 1 ]; then
+    echo "Auto-enabled --vio-9p because readfile mode and host share are set." | tee -a "$LOG_FILE"
+  fi
 
   if [ "$USE_READFILE" -eq 0 ]; then
     (
@@ -429,7 +617,7 @@ run_auto() {
       else
         sleep "$GUEST_WAIT"
       fi
-      if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+      if tmux_cmd has-session -t "$SESSION_NAME" 2>/dev/null; then
         send_guest_cmds
         echo "Guest commands sent." >> "$LOG_FILE"
       else
@@ -438,7 +626,14 @@ run_auto() {
     ) &
   else
     echo "Using gem5 readfile script; console injection disabled." >> "$LOG_FILE"
+    echo "Readfile script: $READFILE_SCRIPT" >> "$LOG_FILE"
+    echo "Readfile log markers: PHASE1_RUNSCRIPT_LOG_BEGIN/END" >> "$LOG_FILE"
   fi
+
+  # Allow this monitoring shell to survive VS Code terminal closure (SIGHUP).
+  # gem5 is already isolated via setsid in boot_gem5.sh; this just keeps
+  # the poll/tail alive so the log finishes if the user leaves VS Code open.
+  trap '' HUP
 
   if [ "$AUTO_STOP" -eq 1 ]; then
     if [ "$TAIL_LOG" -eq 1 ]; then
@@ -447,10 +642,18 @@ run_auto() {
     fi
 
     while true; do
-      if grep -q "Phase 1 Complete" "$LOG_FILE"; then
+      if grep -q "Phase 1 Complete" "$LOG_FILE" 2>/dev/null; then
         echo "Detected phase1 completion. Stopping gem5..." >> "$LOG_FILE"
         "$SCRIPT_DIR/boot_gem5.sh" stop >> "$LOG_FILE" 2>&1 || true
-        tmux kill-session -t "$SESSION_NAME" >> "$LOG_FILE" 2>&1 || true
+        tmux_cmd kill-session -t "$SESSION_NAME" >> "$LOG_FILE" 2>&1 || true
+        break
+      fi
+      # Also stop if gem5.out contains PHASE1_RUNSCRIPT_DONE (m5 exit was called)
+      if grep -q "PHASE1_RUNSCRIPT_DONE" "$LOG_FILE" 2>/dev/null; then
+        echo "Detected readfile script completion. Stopping gem5..." >> "$LOG_FILE"
+        sleep 3  # give sync a moment
+        "$SCRIPT_DIR/boot_gem5.sh" stop >> "$LOG_FILE" 2>&1 || true
+        tmux_cmd kill-session -t "$SESSION_NAME" >> "$LOG_FILE" 2>&1 || true
         break
       fi
       sleep 5

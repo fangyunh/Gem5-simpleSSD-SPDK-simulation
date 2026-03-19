@@ -224,14 +224,17 @@ Device::read(PacketPtr pkt)
               cpu, index, daddr, pkt->getAddr(), pkt->getSize());
 
     const Regs::Info &info = regInfo(raddr);
-    if (!info.read)
-        panic("read %s (write only): "
+        if (!info.read) {
+          panic("read %s (write only): "
               "cpu=%d vnic=%d da=%#x pa=%#x size=%d",
               info.name, cpu, index, daddr, pkt->getAddr(), pkt->getSize());
+        }
 
-        panic("read %s (invalid size): "
+        if (pkt->getSize() != 4 && pkt->getSize() != 8) {
+          panic("read %s (invalid size): "
               "cpu=%d vnic=%d da=%#x pa=%#x size=%d",
               info.name, cpu, index, daddr, pkt->getAddr(), pkt->getSize());
+        }
 
     prepareRead(cpu, index);
 

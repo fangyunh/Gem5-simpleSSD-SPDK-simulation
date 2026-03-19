@@ -124,8 +124,11 @@ def compareVersions(v1, v2):
     def make_version_list(v):
         if isinstance(v, (list,tuple)):
             return v
-        elif isinstance(v, str):
-            return map(lambda x: int(re.match('\d+', x).group()), v.split('.'))
+        elif hasattr(v, 'split'):
+            if isinstance(v, bytes):
+                v = v.decode('utf-8', errors='replace')
+            v = v.strip()
+            return list(map(lambda x: int(re.match(r'\d+', x).group()), v.split('.')))
         else:
             raise TypeError()
 
@@ -198,7 +201,10 @@ def readCommand(cmd, **kwargs):
             return exception
         raise
 
-    return subp.communicate()[0]
+    output = subp.communicate()[0]
+    if isinstance(output, bytes):
+        output = output.decode('utf-8', errors='replace')
+    return output
 
 def makeDir(path):
     """Make a directory if it doesn't exist.  If the path does exist,

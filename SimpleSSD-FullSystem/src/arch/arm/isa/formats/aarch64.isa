@@ -3010,7 +3010,7 @@ let {{
     decoder_output ='''
 namespace Aarch64
 {'''
-    for decoderFlavour, type_dict in decoders.iteritems():
+    for decoderFlavour, type_dict in decoders.items():
         decoder_output +='''
 template StaticInstPtr decodeFpAdvSIMD<%(df)sDecoder>(ExtMachInst machInst);
 ''' % { "df" : decoderFlavour }

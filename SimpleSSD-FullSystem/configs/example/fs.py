@@ -90,8 +90,8 @@ def build_test_system(np, simplessd):
         test_sys = makeSparcSystem(test_mem_mode, bm[0], cmdline=cmdline)
     elif buildEnv['TARGET_ISA'] == "x86":
         test_sys = makeLinuxX86System(test_mem_mode, simplessd, np, bm[0],
-                          options.ruby, cmdline=cmdline,
-                          vio_9p=options.vio_9p)
+                  options.ruby, cmdline=cmdline,
+                  vio_9p=getattr(options, 'vio_9p', False))
     elif buildEnv['TARGET_ISA'] == "arm":
         test_sys = makeArmSystem(
             test_mem_mode,
@@ -105,7 +105,7 @@ def build_test_system(np, simplessd):
             external_memory=options.external_memory_system,
             ruby=options.ruby,
             security=options.enable_security_extensions,
-            vio_9p=options.vio_9p,
+            vio_9p=getattr(options, 'vio_9p', False),
             bootloader=options.bootloader,
         )
         if options.enable_context_switch_stats_dump:

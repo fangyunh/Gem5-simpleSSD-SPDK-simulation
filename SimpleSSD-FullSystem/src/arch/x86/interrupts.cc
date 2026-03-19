@@ -383,7 +383,11 @@ X86ISA::Interrupts::readReg(ApicRegIndex reg)
 {
     if (reg >= APIC_TRIGGER_MODE(0) &&
             reg <= APIC_TRIGGER_MODE(15)) {
-        panic("Local APIC Trigger Mode registers are unimplemented.\n");
+        // TMR bits are maintained internally by requestInterrupt() via
+        // setRegArrayBit/clearRegArrayBit.  Reads are diagnostic-only
+        // (e.g. Linux print_local_APIC / ioapic_retrigger_irq).
+        // Return the internally-managed register value rather than panicking.
+        return regs[reg];
     }
     switch (reg) {
       case APIC_ARBITRATION_PRIORITY:
@@ -426,7 +430,9 @@ X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val)
     }
     if (reg >= APIC_TRIGGER_MODE(0) &&
             reg <= APIC_TRIGGER_MODE(15)) {
-        panic("Local APIC Trigger Mode registers are unimplemented.\n");
+        // TMR is hardware-managed (set by requestInterrupt via setRegArrayBit).
+        // Software writes to TMR are undefined behaviour; silently ignore.
+        return;
     }
     if (reg >= APIC_INTERRUPT_REQUEST(0) &&
             reg <= APIC_INTERRUPT_REQUEST(15)) {

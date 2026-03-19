@@ -44,7 +44,7 @@ from __future__ import print_function
 import array
 import bisect
 import functools
-import imp
+import types
 import os
 import re
 import sys
@@ -145,11 +145,12 @@ class SourceMeta(type):
         cls.all = SourceList()
 
 class SourceFile(object):
+
+    __metaclass__ = SourceMeta
     '''Base object that encapsulates the notion of a source file.
     This includes, the source node, target node, various manipulations
     of those.  A source file also specifies a set of tags which
     describing arbitrary properties of the source file.'''
-    __metaclass__ = SourceMeta
 
     static_objs = {}
     shared_objs = {}
@@ -157,14 +158,14 @@ class SourceFile(object):
     def __init__(self, source, tags=None, add_tags=None, append=None):
         if tags is None:
             tags='gem5 lib'
-        if isinstance(tags, basestring):
+        if isinstance(tags, str):
             tags = set([tags])
         if not isinstance(tags, set):
             tags = set(tags)
         self.tags = tags
 
         if add_tags:
-            if isinstance(add_tags, basestring):
+            if isinstance(add_tags, str):
                 add_tags = set([add_tags])
             if not isinstance(add_tags, set):
                 add_tags = set(add_tags)
@@ -266,7 +267,7 @@ def blobToCpp(data, symbol, cpp_code, hpp_code=None, namespace=None):
     cpp_code(symbol_declaration + ' = {')
     cpp_code.indent()
     step = 16
-    for i in xrange(0, len(data), step):
+    for i in range(0, len(data), step):
         x = array.array('B', data[i:i+step])
         cpp_code(''.join('%d,' % d for d in x))
     cpp_code.dedent()
@@ -382,7 +383,7 @@ class SimObject(PySource):
         the m5.objects package)'''
         super(SimObject, self).__init__('m5.objects', source, tags, add_tags)
         if self.fixed:
-            raise AttributeError, "Too late to call SimObject now."
+            raise AttributeError("Too late to call SimObject now.")
 
         bisect.insort_right(SimObject.modnames, self.modname)
 
@@ -416,8 +417,9 @@ class ExecutableMeta(type):
         cls.all = []
 
 class Executable(object):
-    '''Base class for creating an executable from sources.'''
+
     __metaclass__ = ExecutableMeta
+    '''Base class for creating an executable from sources.'''
 
     abstract = True
 
@@ -429,8 +431,8 @@ class Executable(object):
         self.target = target
 
         isFilter = lambda arg: isinstance(arg, SourceFilter)
-        self.filters = filter(isFilter, srcs_and_filts)
-        sources = filter(lambda a: not isFilter(a), srcs_and_filts)
+        self.filters = list(filter(isFilter, srcs_and_filts))
+        sources = list(filter(lambda a: not isFilter(a), srcs_and_filts))
 
         srcs = SourceList()
         for src in sources:
@@ -552,12 +554,12 @@ Export('GTest')
 debug_flags = {}
 def DebugFlag(name, desc=None):
     if name in debug_flags:
-        raise AttributeError, "Flag %s already specified" % name
+        raise AttributeError("Flag %s already specified" % name)
     debug_flags[name] = (name, (), desc)
 
 def CompoundFlag(name, flags, desc=None):
     if name in debug_flags:
-        raise AttributeError, "Flag %s already specified" % name
+        raise AttributeError("Flag %s already specified" % name)
 
     compound = tuple(flags)
     debug_flags[name] = (name, compound, desc)
@@ -753,7 +755,7 @@ class DictImporter(object):
         return None
 
     def load_module(self, fullname):
-        mod = imp.new_module(fullname)
+        mod = types.ModuleType(fullname)
         sys.modules[fullname] = mod
         self.installed.add(fullname)
 
@@ -771,7 +773,7 @@ class DictImporter(object):
             mod.__path__ = source.modpath
         mod.__file__ = source.abspath
 
-        exec file(source.abspath, 'r') in mod.__dict__
+        exec(open(source.abspath, 'r').read(), mod.__dict__)
 
         return mod
 
@@ -801,7 +803,7 @@ sys.meta_path.remove(importer)
 sim_objects = m5.SimObject.allClasses
 all_enums = m5.params.allEnums
 
-for name,obj in sorted(sim_objects.iteritems()):
+for name,obj in sorted(sim_objects.items()):
     for param in obj._params.local.values():
         # load the ptype attribute now because it depends on the
         # current version of SimObject.allClasses, but when scons
@@ -924,7 +926,7 @@ def createSimObjectPyBindWrapper(target, source, env):
 
 # Generate all of the SimObject param C++ struct header files
 params_hh_files = []
-for name,simobj in sorted(sim_objects.iteritems()):
+for name,simobj in sorted(sim_objects.items()):
     py_source = PySource.modules[simobj.__module__]
     extra_deps = [ py_source.tnode ]
 
@@ -936,7 +938,7 @@ for name,simobj in sorted(sim_objects.iteritems()):
 
 # C++ parameter description files
 if GetOption('with_cxx_config'):
-    for name,simobj in sorted(sim_objects.iteritems()):
+    for name,simobj in sorted(sim_objects.items()):
         py_source = PySource.modules[simobj.__module__]
         extra_deps = [ py_source.tnode ]
 
@@ -961,14 +963,14 @@ if GetOption('with_cxx_config'):
 
         code = code_formatter()
 
-        for name,simobj in sorted(sim_objects.iteritems()):
+        for name,simobj in sorted(sim_objects.items()):
             if not hasattr(simobj, 'abstract') or not simobj.abstract:
                 code('#include "cxx_config/${name}.hh"')
         code()
         code('void cxxConfigInit()')
         code('{')
         code.indent()
-        for name,simobj in sorted(sim_objects.iteritems()):
+        for name,simobj in sorted(sim_objects.items()):
             not_abstract = not hasattr(simobj, 'abstract') or \
                 not simobj.abstract
             if not_abstract and 'type' in simobj.__dict__:
@@ -983,14 +985,14 @@ if GetOption('with_cxx_config'):
     env.Command(cxx_config_init_cc_file, Value(name),
         MakeAction(createCxxConfigInitCC, Transform("CXXCINIT")))
     cxx_param_hh_files = ["cxx_config/%s.hh" % simobj
-        for name,simobj in sorted(sim_objects.iteritems())
+        for name,simobj in sorted(sim_objects.items())
         if not hasattr(simobj, 'abstract') or not simobj.abstract]
     Depends(cxx_config_init_cc_file, cxx_param_hh_files +
             [File('sim/cxx_config.hh')])
     Source(cxx_config_init_cc_file)
 
 # Generate all enum header files
-for name,enum in sorted(all_enums.iteritems()):
+for name,enum in sorted(all_enums.items()):
     py_source = PySource.modules[enum.__module__]
     extra_deps = [ py_source.tnode ]
 
@@ -1007,7 +1009,7 @@ for name,enum in sorted(all_enums.iteritems()):
 
 # Generate SimObject Python bindings wrapper files
 if env['USE_PYTHON']:
-    for name,simobj in sorted(sim_objects.iteritems()):
+    for name,simobj in sorted(sim_objects.items()):
         py_source = PySource.modules[simobj.__module__]
         extra_deps = [ py_source.tnode ]
         cc_file = File('python/_m5/param_%s.cc' % name)
@@ -1059,7 +1061,7 @@ namespace Debug {
 
 ''')
 
-    for name, flag in sorted(source[0].read().iteritems()):
+    for name, flag in sorted(source[0].read().items()):
         n, compound, desc = flag
         assert n == name
 
@@ -1121,7 +1123,7 @@ namespace Debug {
 
     code.write(str(target[0]))
 
-for name,flag in sorted(debug_flags.iteritems()):
+for name,flag in sorted(debug_flags.items()):
     n, compound, desc = flag
     assert n == name
 
