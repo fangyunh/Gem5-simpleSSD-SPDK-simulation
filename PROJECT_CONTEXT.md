@@ -15,9 +15,46 @@ Run a repeatable full-system NVMe SSD performance simulation using:
 - **SimpleSSD** (gem5 plugin implementing a faithful NVMe SSD model)
 - **SPDK** (`spdk_nvme_perf`) running inside the guest to drive NVMe I/O
 
-The primary experiment ("Phase 1") is a random-read IOPS sweep over queue depths
-`[16, 32, 64, 128]` and I/O sizes `[4096, 16384]` bytes. Results are written as CSV files
-on the host and plotted automatically.
+### 1.1 Current Workload — Phase 1 (Random Read IOPS Sweep)
+
+The active experiment is a **4KB and 16KB random-read** IOPS sweep driven by
+`spdk_nvme_perf`. The sweep covers:
+
+| Parameter | Values |
+|---|---|
+| Queue depth (QD) | 16, 32, 64, 128 |
+| I/O size | 4096 B, 16384 B |
+| Queue pairs | 1 (single-core, core 0) |
+| Access pattern | Random read (`-w randread`) |
+| Measurement window | 30 s steady-state per point |
+
+Results are collected as CSV files under `results/phase1_runs/<tag>/` and plotted
+automatically by `scripts/plot_phase1.py`.
+
+The goal of this phase is to establish a baseline IOPS vs. queue depth curve for the
+SimpleSSD NVMe model, verify that the full simulation stack is functionally correct
+end-to-end, and confirm that SPDK can reach the SSD at realistic throughputs inside gem5.
+
+### 1.2 Research Direction — CPU Bottleneck at Ultra-High IOPS
+
+The longer-term research question is: **at what NVMe throughput does the host CPU become
+the bottleneck, and what is the exact CPU cost per I/O?**
+
+The plan is to progressively tune the SimpleSSD configuration (`fast_ssd.cfg`) to reduce
+simulated NAND latency — shrinking channel count, page latency, and queue service times —
+until the SSD can sustain **tens of millions of IOPS**. At that point, the limiting factor
+shifts from storage latency to CPU cycles spent in the NVMe driver stack (doorbell writes,
+CQE polling, DMA completion handling inside SPDK).
+
+Key metrics to track in this regime:
+- `Cycles_Per_IO` — CPU cycles consumed per completed I/O (from perf stat or SimpleSSD counters)
+- `Submit_Logic_ns`, `Completion_Logic_ns`, `Doorbell_ns`, `CQE_Detect_ns` — per-stage
+  CPU time breakdown from SimpleSSD's internal debug counters
+- IOPS saturation point as a function of QD and I/O size
+- Whether the bottleneck is in the NVMe driver polling loop, DMA engine, or interrupt handling
+
+This makes gem5 + SimpleSSD ideal for the study: the simulation exposes cycle-accurate
+CPU microarchitecture events that are invisible in real hardware profiling.
 
 ---
 
@@ -76,7 +113,7 @@ SimpleSSD_Gem5_simulation/
 ### 4.1 Simulation Stack
 
 ```
-Host Linux (28-core, 62 GB RAM)
+Host Linux
   └── gem5.opt  [setsid, nice -n 19, taskset to cores 0..(nproc-9)]
         ├── Simulated X86 O3CPU @ ~1GHz
         ├── Simulated 4 GB guest DRAM
@@ -308,21 +345,7 @@ block-level checksums, not byte offset.
 
 ---
 
-## 9. Resource Usage and Server Safety
-
-gem5 is a **normal unprivileged user process**. A crash cannot affect the host OS, kernel,
-or other users' work in any way.
-
-| Resource | gem5 usage | Notes |
-|---|---|---|
-| RAM | ~7 GB | 4 GB guest DRAM + ~1 GB binary + ~1 GB SimpleSSD state. Well within 50 GB. |
-| CPU priority | nice -n 19 | Absolute lowest. Only runs when nothing else wants CPU. |
-| CPU cores | 0 to (nproc-9) | Reserves ≥8 cores for OS + other users on a shared server. |
-| Disk I/O | Minimal after boot | All NVMe storage I/O is simulated in-memory. |
-
----
-
-## 10. Current Status (2026-03-19)
+## 9. Current Status (2026-03-19)
 
 ### ✅ Completed
 
@@ -341,7 +364,6 @@ or other users' work in any way.
 
 | Item | Detail |
 |---|---|
-| `x86-ubuntu.img` upload | rsync running to tzhang1.ecse.rpi.edu, ~24% complete, resumable |
 
 ### ❌ Not Yet Done
 
@@ -354,12 +376,10 @@ or other users' work in any way.
 
 ## 11. Next Steps (in order)
 
-1. **Wait for `upload_large_files.sh` to finish** — all 4 files must arrive on remote.
-2. **On remote server:** create conda env, rebuild gem5 from source (§5.1).
-3. **Run simulation in tmux** using the minimal command in §8.
-4. **If it crashes:** read the tmux window output and/or `tail -50 logs/gem5.out` for
+1. **Run simulation in tmux** using the minimal command in §8.
+2. **If it crashes:** read the tmux window output and/or `tail -50 logs/gem5.out` for
    the panic message, then apply a targeted fix.
-5. **If it succeeds:** collect `results/phase1_runs/smoke_test_v1/*.csv`.
+3. **If it succeeds:** collect `results/phase1_runs/smoke_test_v1/*.csv`.
 
 ---
 
