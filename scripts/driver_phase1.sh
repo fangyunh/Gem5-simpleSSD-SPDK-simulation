@@ -641,6 +641,8 @@ run_auto() {
       TAIL_PID=$!
     fi
 
+    _GEM5_PID_FILE="$LOG_DIR_HOST/gem5.pid"
+
     while true; do
       if grep -q "Phase 1 Complete" "$LOG_FILE" 2>/dev/null; then
         echo "Detected phase1 completion. Stopping gem5..." >> "$LOG_FILE"
@@ -655,6 +657,19 @@ run_auto() {
         "$SCRIPT_DIR/boot_gem5.sh" stop >> "$LOG_FILE" 2>&1 || true
         tmux_cmd kill-session -t "$SESSION_NAME" >> "$LOG_FILE" 2>&1 || true
         break
+      fi
+      # Detect if gem5 died unexpectedly (internal panic, OOM-kill, etc.)
+      if [ -f "$_GEM5_PID_FILE" ]; then
+        _GEM5_RUNNING_PID=$(cat "$_GEM5_PID_FILE" 2>/dev/null)
+        if [ -n "$_GEM5_RUNNING_PID" ] && ! kill -0 "$_GEM5_RUNNING_PID" 2>/dev/null; then
+          msg="ERROR: gem5 (pid $_GEM5_RUNNING_PID) died unexpectedly! Check logs/gem5.out for details."
+          echo "$msg" | tee -a "$LOG_FILE"
+          # Print the last 20 lines of gem5.out so the crash reason is visible right here
+          echo "--- last 20 lines of gem5.out ---" | tee -a "$LOG_FILE"
+          tail -20 "$LOG_DIR_HOST/gem5.out" 2>/dev/null | tee -a "$LOG_FILE"
+          echo "---------------------------------" | tee -a "$LOG_FILE"
+          break
+        fi
       fi
       sleep 5
     done
