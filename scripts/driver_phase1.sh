@@ -69,7 +69,7 @@ CONSOLE_PORT=3456
 SESSION_NAME="phase1_auto"
 GUEST_WAIT=20
 GUEST_CWD=""
-TAIL_LOG=1
+TAIL_LOG=0
 GUEST_OUTPUT_ROOT="/root/SimpleSSD_Gem5_simulation/results/phase1_runs"
 GUEST_REPO="/root/SimpleSSD_Gem5_simulation"
 GUEST_REPO_CANDIDATES="/root/SimpleSSD_Gem5_simulation /home/root/SimpleSSD_Gem5_simulation /home/ubuntu/SimpleSSD_Gem5_simulation /mnt/host/SimpleSSD_Gem5_simulation /mnt/9p/SimpleSSD_Gem5_simulation"
@@ -642,9 +642,16 @@ run_auto() {
     fi
 
     _GEM5_PID_FILE="$LOG_DIR_HOST/gem5.pid"
+    _HEARTBEAT=0
+
+    echo "[$(date '+%H:%M:%S')] gem5 started. Watching for completion."
+    echo "  gem5 log : logs/gem5.out"
+    echo "  perf log : $LOG_FILE"
+    echo "  (Ctrl+B D to detach from tmux and leave running in background)"
 
     while true; do
       if grep -q "Phase 1 Complete" "$LOG_FILE" 2>/dev/null; then
+        echo "[$(date '+%H:%M:%S')] Detected phase1 completion. Stopping gem5..."
         echo "Detected phase1 completion. Stopping gem5..." >> "$LOG_FILE"
         "$SCRIPT_DIR/boot_gem5.sh" stop >> "$LOG_FILE" 2>&1 || true
         tmux_cmd kill-session -t "$SESSION_NAME" >> "$LOG_FILE" 2>&1 || true
@@ -652,6 +659,7 @@ run_auto() {
       fi
       # Also stop if gem5.out contains PHASE1_RUNSCRIPT_DONE (m5 exit was called)
       if grep -q "PHASE1_RUNSCRIPT_DONE" "$LOG_FILE" 2>/dev/null; then
+        echo "[$(date '+%H:%M:%S')] Detected readfile script completion. Stopping gem5..."
         echo "Detected readfile script completion. Stopping gem5..." >> "$LOG_FILE"
         sleep 3  # give sync a moment
         "$SCRIPT_DIR/boot_gem5.sh" stop >> "$LOG_FILE" 2>&1 || true
@@ -662,14 +670,19 @@ run_auto() {
       if [ -f "$_GEM5_PID_FILE" ]; then
         _GEM5_RUNNING_PID=$(cat "$_GEM5_PID_FILE" 2>/dev/null)
         if [ -n "$_GEM5_RUNNING_PID" ] && ! kill -0 "$_GEM5_RUNNING_PID" 2>/dev/null; then
-          msg="ERROR: gem5 (pid $_GEM5_RUNNING_PID) died unexpectedly! Check logs/gem5.out for details."
-          echo "$msg" | tee -a "$LOG_FILE"
-          # Print the last 20 lines of gem5.out so the crash reason is visible right here
-          echo "--- last 20 lines of gem5.out ---" | tee -a "$LOG_FILE"
-          tail -20 "$LOG_DIR_HOST/gem5.out" 2>/dev/null | tee -a "$LOG_FILE"
-          echo "---------------------------------" | tee -a "$LOG_FILE"
+          echo "[$(date '+%H:%M:%S')] ERROR: gem5 (pid $_GEM5_RUNNING_PID) died unexpectedly!"
+          echo "--- last 20 lines of logs/gem5.out ---"
+          tail -20 "$LOG_DIR_HOST/gem5.out" 2>/dev/null
+          echo "--------------------------------------"
+          echo "Crashed at $(date '+%H:%M:%S'). Check logs/gem5.out for full details." | tee -a "$LOG_FILE"
           break
         fi
+      fi
+      # Print a one-line heartbeat every 60s so the tmux window isn't silently blank
+      _HEARTBEAT=$(( _HEARTBEAT + 5 ))
+      if [ $(( _HEARTBEAT % 60 )) -eq 0 ]; then
+        _LAST=$(tail -1 "$LOG_DIR_HOST/gem5.out" 2>/dev/null | cut -c1-80)
+        echo "[$(date '+%H:%M:%S')] still running | gem5.out tail: $_LAST"
       fi
       sleep 5
     done
