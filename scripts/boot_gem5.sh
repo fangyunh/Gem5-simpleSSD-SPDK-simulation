@@ -112,28 +112,42 @@ start_gem5() {
     exit 1
   fi
 
-  # Start gem5 with nohup (ignore SIGHUP) and disown it from bash's job table
-  # so that VS Code terminal closure / PTY hangup cannot stop it.
-  # diod (started as a child of gem5) inherits the same protections.
+  # Three-layer detachment from the terminal session so that VS Code crashes,
+  # SSH disconnects, or any PTY hangup can NEVER kill gem5 or diod:
   #
-  # nice -n 15: lower gem5's scheduling priority so the host OS always gets
-  # enough CPU time for display/input, preventing system freeze.
+  #   setsid  -- puts gem5 (and all its children, including diod) into a BRAND
+  #              NEW kernel session, completely severing it from the launching
+  #              terminal's session/process-group.  The kernel can no longer
+  #              reach it with any session-lifecycle signal (SIGHUP, SIGTERM
+  #              from login-session teardown).  This is the critical fix:
+  #              nohup+disown alone still leave the process in the original
+  #              session so systemd/PAM/kernel can send SIGTERM on logout.
   #
-  # taskset: pin gem5 (and its children including diod) to cores 0-19,
-  # reserving cores 20-27 for the OS desktop/compositor/input.
-  # If the host has fewer than 21 cores, taskset falls back gracefully.
+  #   nohup   -- makes the process explicitly ignore SIGHUP as a belt-and-
+  #              suspenders measure (belt = setsid; suspenders = nohup).
+  #
+  #   disown  -- removes gem5 from bash's job table so bash won't track it.
+  #
+  # nice -n 19: absolute lowest scheduling priority (0..19 scale, higher=nicer).
+  #   gem5 gets CPU only when nothing else wants it.  Safe for shared servers.
+  #   On a dedicated machine you can lower this to -n 10 if speed matters more.
+  #
+  # taskset: pin gem5 + diod to cores 0..(nproc-9), reserving 8 cores for
+  #   the OS / other users.  Falls back gracefully on small machines.
   _NPROC=$(nproc 2>/dev/null || echo 4)
   if [ "$_NPROC" -gt 20 ]; then
     _TASKSET_PREFIX="taskset -c 0-$((${_NPROC} - 9))"
+  elif [ "$_NPROC" -gt 8 ]; then
+    _TASKSET_PREFIX="taskset -c 0-$((${_NPROC} - 4))"
   else
     _TASKSET_PREFIX=""
   fi
 
-  nohup $_TASKSET_PREFIX nice -n 15 ./build/X86/gem5.opt "${GEM5_ARGS[@]}" \
+  setsid nohup $_TASKSET_PREFIX nice -n 19 ./build/X86/gem5.opt "${GEM5_ARGS[@]}" \
     > "$LOG_FILE" 2>&1 &
   GEM5_PID=$!
   echo "$GEM5_PID" > "$PID_FILE"
-  # disown: remove from bash job table so bash won't SIGHUP it on exit.
+  # disown: belt-and-suspenders removal from bash job table.
   disown "$GEM5_PID" 2>/dev/null || true
   echo "gem5 started (pid $(cat "$PID_FILE"))"
   echo "log: $LOG_FILE"
