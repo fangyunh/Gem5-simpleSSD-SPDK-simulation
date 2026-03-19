@@ -105,8 +105,11 @@ if developer_mode and meson.version().version_compare('>=0.60.2')
     endif
 endif
 
-if not is_ms_compiler
-    # we require SSE4.2 for DPDK
+disable_sse4_1 = '-mno-sse4.1' in get_option('c_args')
+disable_sse4_2 = '-mno-sse4.2' in get_option('c_args')
+
+if not is_ms_compiler and not disable_sse4_2
+    # We require SSE4.2 for DPDK unless explicitly disabled by c_args.
     if cc.get_define('__SSE4_2__', args: machine_args) == ''
         message('SSE 4.2 not enabled by default, explicitly enabling')
         machine_args += '-msse4'
@@ -119,7 +122,13 @@ if cc.get_id() != 'msvc'
     machine_args += '-mrtm'
 endif
 
-base_flags = ['SSE', 'SSE2', 'SSE3','SSSE3', 'SSE4_1', 'SSE4_2']
+base_flags = ['SSE', 'SSE2', 'SSE3','SSSE3']
+if not disable_sse4_1
+    base_flags += 'SSE4_1'
+endif
+if not disable_sse4_2
+    base_flags += 'SSE4_2'
+endif
 foreach f:base_flags
     compile_time_cpuflags += ['RTE_CPUFLAG_' + f]
 endforeach

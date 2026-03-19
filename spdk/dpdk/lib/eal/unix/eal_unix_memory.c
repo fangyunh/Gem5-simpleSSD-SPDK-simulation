@@ -4,6 +4,10 @@
 
 #include <string.h>
 #include <sys/mman.h>
+
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
 #include <unistd.h>
 #include <inttypes.h>
 

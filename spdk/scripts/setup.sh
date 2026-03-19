@@ -424,7 +424,12 @@ function configure_linux_pci() {
 		if [[ -n "$driver_path" ]]; then
 			insmod $driver_path || true
 		else
-			modprobe $driver_name
+			# Skip modprobe when the driver is built-in and already present in sysfs.
+			if [[ -d /sys/bus/pci/drivers/$driver_name || -d /sys/module/${driver_name//-/_} ]]; then
+				:
+			else
+				modprobe $driver_name
+			fi
 		fi
 	fi
 

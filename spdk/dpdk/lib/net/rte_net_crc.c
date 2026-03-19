@@ -148,6 +148,7 @@ avx512_vpclmulqdq_init(void)
 
 /* SSE4.2/PCLMULQDQ handling */
 
+#if defined(__SSE4_2__)
 #define SSE42_PCLMULQDQ_CPU_SUPPORTED \
 	rte_cpu_get_flag_enabled(RTE_CPUFLAG_PCLMULQDQ)
 
@@ -159,6 +160,7 @@ sse42_pclmulqdq_init(void)
 		rte_net_crc_sse42_init();
 #endif
 }
+#endif
 
 /* NEON/PMULL handling */
 
@@ -191,11 +193,13 @@ handlers_init(enum rte_net_crc_alg alg)
 #endif
 		/* fall-through */
 	case RTE_NET_CRC_SSE42:
+#if defined(__SSE4_2__)
 #ifdef RTE_ARCH_X86_64
 		if (SSE42_PCLMULQDQ_CPU_SUPPORTED) {
 			handlers[alg].f[RTE_NET_CRC16_CCITT] = rte_crc16_ccitt_sse42_handler;
 			handlers[alg].f[RTE_NET_CRC32_ETH] = rte_crc32_eth_sse42_handler;
 		}
+#endif
 #endif
 		break;
 	case RTE_NET_CRC_NEON:
@@ -272,11 +276,15 @@ uint32_t rte_net_crc_calc(const struct rte_net_crc *ctx, const void *data, const
 RTE_INIT(rte_net_crc_init)
 {
 	rte_net_crc_scalar_init();
+#if defined(__SSE4_2__)
 	sse42_pclmulqdq_init();
+#endif
 	avx512_vpclmulqdq_init();
 	neon_pmull_init();
 	handlers_init(RTE_NET_CRC_SCALAR);
 	handlers_init(RTE_NET_CRC_NEON);
+#if defined(__SSE4_2__)
 	handlers_init(RTE_NET_CRC_SSE42);
+#endif
 	handlers_init(RTE_NET_CRC_AVX512);
 }

@@ -13,6 +13,7 @@
 
 /* SSE4.2 */
 
+#if defined(__SSE4_2__)
 void
 rte_net_crc_sse42_init(void);
 
@@ -21,6 +22,7 @@ rte_crc16_ccitt_sse42_handler(const uint8_t *data, uint32_t data_len);
 
 uint32_t
 rte_crc32_eth_sse42_handler(const uint8_t *data, uint32_t data_len);
+#endif
 
 /* AVX512 */
 

@@ -7,6 +7,66 @@
 
 #include <rte_vect.h>
 
+#if !defined(__SSE4_2__)
+
+static inline uint32_t
+crc32c_sse42_u8(uint8_t data, uint32_t init_val)
+{
+	return crc32c_1byte(data, init_val);
+}
+
+static inline uint32_t
+crc32c_sse42_u16(uint16_t data, uint32_t init_val)
+{
+	return crc32c_2bytes(data, init_val);
+}
+
+static inline uint32_t
+crc32c_sse42_u32(uint32_t data, uint32_t init_val)
+{
+	return crc32c_1word(data, init_val);
+}
+
+#ifdef RTE_ARCH_X86_64
+static inline uint32_t
+crc32c_sse42_u64(uint64_t data, uint64_t init_val)
+{
+	return crc32c_2words(data, init_val);
+}
+#endif
+
+static inline uint32_t
+crc32c_sse42_u64_mimic(uint64_t data, uint64_t init_val)
+{
+	return crc32c_2words(data, init_val);
+}
+
+static inline uint32_t
+rte_hash_crc_1byte(uint8_t data, uint32_t init_val)
+{
+	return crc32c_1byte(data, init_val);
+}
+
+static inline uint32_t
+rte_hash_crc_2byte(uint16_t data, uint32_t init_val)
+{
+	return crc32c_2bytes(data, init_val);
+}
+
+static inline uint32_t
+rte_hash_crc_4byte(uint32_t data, uint32_t init_val)
+{
+	return crc32c_1word(data, init_val);
+}
+
+static inline uint32_t
+rte_hash_crc_8byte(uint64_t data, uint32_t init_val)
+{
+	return crc32c_2words(data, init_val);
+}
+
+#else
+
 static inline uint32_t
 crc32c_sse42_u8(uint8_t data, uint32_t init_val)
 {
@@ -107,5 +167,7 @@ rte_hash_crc_8byte(uint64_t data, uint32_t init_val)
 
 	return crc32c_2words(data, init_val);
 }
+
+#endif /* !__SSE4_2__ */
 
 #endif /* _RTE_CRC_X86_H_ */

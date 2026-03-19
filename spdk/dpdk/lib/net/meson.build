@@ -40,17 +40,20 @@ sources = files(
 deps += ['mbuf']
 
 if dpdk_conf.has('RTE_ARCH_X86_64')
-    sources += files('net_crc_sse.c')
-    cflags_options = ['-mpclmul', '-maes']
-    foreach option:cflags_options
-        if cc.has_argument(option)
-            cflags += option
+    # net_crc_sse uses SSE4.1 intrinsics; skip when SSE4.1 is disabled.
+    if cc.get_define('__SSE4_1__', args: machine_args) != ''
+        sources += files('net_crc_sse.c')
+        cflags_options = ['-mpclmul', '-maes']
+        foreach option:cflags_options
+            if cc.has_argument(option)
+                cflags += option
+            endif
+        endforeach
+        # only build AVX-512 support if we also have PCLMULQDQ support
+        if cc.has_argument('-mvpclmulqdq')
+            sources_avx512 += files('net_crc_avx512.c')
+            cflags_avx512 += ['-mvpclmulqdq']
         endif
-    endforeach
-    # only build AVX-512 support if we also have PCLMULQDQ support
-    if cc.has_argument('-mvpclmulqdq')
-        sources_avx512 += files('net_crc_avx512.c')
-        cflags_avx512 += ['-mvpclmulqdq']
     endif
 
 elif (dpdk_conf.has('RTE_ARCH_ARM64') and
