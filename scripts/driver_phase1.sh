@@ -43,7 +43,7 @@ STEADY_TIME=30
 RUN_TAG="phase1_run_$(date +%Y%m%d_%H%M%S)"
 
 # phase1-specific toggles
-PCI_ADDR="0000:02:00.0"
+PCI_ADDR="0000:00:05.0"
 PCI_CHECK=0
 PERF_ENABLE=1
 SKIP_SETUP=0
@@ -508,6 +508,12 @@ HOST_SHARE="__HOST_SHARE__"
 
   echo "PHASE1_RUNSCRIPT_REPO: $REPO_PATH"
   cd "$REPO_PATH" || exit 1
+
+  # --- memlock fix: SPDK requires unlimited locked memory ---
+  mkdir -p /etc/security/limits.d
+  echo '* - memlock unlimited' > /etc/security/limits.d/99-memlock.conf
+  ulimit -l unlimited 2>/dev/null || true
+
 export CORE_IDS="__CORE_IDS__"
 export CORE_MASKS="__CORE_MASKS__"
 export QPAIRS_LIST="__QPAIRS__"
@@ -669,7 +675,16 @@ run_auto() {
       # Detect if gem5 died unexpectedly (internal panic, OOM-kill, etc.)
       if [ -f "$_GEM5_PID_FILE" ]; then
         _GEM5_RUNNING_PID=$(cat "$_GEM5_PID_FILE" 2>/dev/null)
-        if [ -n "$_GEM5_RUNNING_PID" ] && ! kill -0 "$_GEM5_RUNNING_PID" 2>/dev/null; then
+        # Wait up to 60s for gem5 PID to become valid (handles stale PID file from prior run)
+        if [ -n "$_GEM5_RUNNING_PID" ] && [ "${_GEM5_PID_VALIDATED:-0}" -eq 0 ]; then
+          if kill -0 "$_GEM5_RUNNING_PID" 2>/dev/null; then
+            _GEM5_PID_VALIDATED=1
+          elif [ "$_HEARTBEAT" -lt 60 ]; then
+            sleep 5
+            continue
+          fi
+        fi
+        if [ -n "$_GEM5_RUNNING_PID" ] && [ "${_GEM5_PID_VALIDATED:-0}" -eq 1 ] && ! kill -0 "$_GEM5_RUNNING_PID" 2>/dev/null; then
           echo "[$(date '+%H:%M:%S')] ERROR: gem5 (pid $_GEM5_RUNNING_PID) died unexpectedly!"
           echo "--- last 20 lines of logs/gem5.out ---"
           tail -20 "$LOG_DIR_HOST/gem5.out" 2>/dev/null

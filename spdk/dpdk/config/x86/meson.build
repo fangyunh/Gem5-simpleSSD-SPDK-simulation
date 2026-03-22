@@ -122,7 +122,7 @@ if cc.get_id() != 'msvc'
     machine_args += '-mrtm'
 endif
 
-base_flags = ['SSE', 'SSE2', 'SSE3','SSSE3']
+base_flags = ['SSE', 'SSE2', 'SSE3']
 if not disable_sse4_1
     base_flags += 'SSE4_1'
 endif

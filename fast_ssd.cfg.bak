@@ -261,15 +261,14 @@ EnableMultiPlaneOperation = 1
 #  TLC: LSB, CSB and MSB timing should valid
 NANDType = 1
 
-## Set NAND timing (unit: picoseconds)
-# Realistic Samsung V-NAND MLC values
-LSBRead = 45000000       # 45 us
-LSBWrite = 500000000     # 500 us
-CSBRead = 0              # N/A for MLC (NANDType=1)
-CSBWrite = 0             # N/A for MLC (NANDType=1)
-MSBRead = 65000000       # 65 us
-MSBWrite = 1300000000    # 1300 us
-Erase = 3500000000       # 3.5 ms
+## Set NAND timing
+LSBRead = 45000
+LSBWrite = 350000
+CSBRead = 45000
+CSBWrite = 350000
+MSBRead = 45000
+MSBWrite = 350000
+Erase = 3500000
 
 ## Set speed and width of DMA in channel in MT/s
 # Width should be 8 or 16
@@ -334,7 +333,7 @@ FillingMode = 0
 # Fill (warm-up) pages before simulation
 # Set # pages to write (Ratio to total logical pages)
 # 0.0 <= val <= 1.0
-FillRatio = 0.5
+FillRatio = 0.0
 # InvalidPageRatio
 # Create invalid pages by overwrite filled pages
 # Set # pages to write (Ratio to total logical pages)

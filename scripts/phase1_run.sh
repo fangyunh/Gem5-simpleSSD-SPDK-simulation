@@ -6,7 +6,7 @@
 # ==============================================================================
 
 # --- CONFIGURATION (Adjust these) ---
-PCI_ADDR=${PCI_ADDR:-"0000:02:00.0"}  # PCI Address of the TARGET (Secondary) Drive
+PCI_ADDR=${PCI_ADDR:-"0000:00:05.0"}  # PCI Address of SimpleSSD NVMe in gem5
 CORE_ID=${CORE_ID:-0}                 # CPU Core to pin the workload to
 CORE_MASK=${CORE_MASK:-"0x1"}         # Hex mask for CORE_ID (used if CORE_IDS is unset)
 CORE_IDS=(${CORE_IDS:-$CORE_ID})       # Space-separated list: "0 1 2"
@@ -23,7 +23,12 @@ OUTPUT_BASE=${OUTPUT_BASE:-"$OUTPUT_ROOT/$RUN_TAG"}
 # Path to SPDK repo (for scripts/setup.sh)
 SPDK_DIR=${SPDK_DIR:-"$ROOT_DIR/spdk"}
 # Path to SPDK perf binary (can be overridden via env var)
-SPDK_PERF_BIN=${SPDK_PERF_BIN:-"$SPDK_DIR/build/bin/spdk_nvme_perf"}
+# Prefer the Docker-compiled binary (SSSE3-free, glibc 2.27 compatible)
+if [ -x "$ROOT_DIR/docker_artifacts/guest_spdk_nvme_perf" ]; then
+  SPDK_PERF_BIN=${SPDK_PERF_BIN:-"$ROOT_DIR/docker_artifacts/guest_spdk_nvme_perf"}
+else
+  SPDK_PERF_BIN=${SPDK_PERF_BIN:-"$SPDK_DIR/build/bin/spdk_nvme_perf"}
+fi
 # Hugepage memory in MB for scripts/setup.sh (override via env HUGEMEM_MB)
 HUGEMEM_MB=${HUGEMEM_MB:-2048}
 SKIP_SETUP=${SKIP_SETUP:-0}
@@ -37,6 +42,11 @@ fi
 # Basic dependency checks (post-OS reinstall safety net)
 PCI_CHECK=${PCI_CHECK:-1}
 PERF_ENABLE=${PERF_ENABLE:-1}
+# gem5 has no hardware PMU; auto-disable perf if not available
+if [ "$PERF_ENABLE" -eq 1 ] && ! command -v perf >/dev/null 2>&1; then
+  echo "perf not found; disabling PERF_ENABLE"
+  PERF_ENABLE=0
+fi
 
 for bin in python3; do
     if ! command -v "$bin" >/dev/null 2>&1; then

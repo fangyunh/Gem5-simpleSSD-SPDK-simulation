@@ -277,19 +277,30 @@ void Controller::writeRegister(uint64_t offset, uint64_t size, uint8_t *buffer,
         arbitration = (registers.configuration & 0x00003800) >> 11;
 
         // Apply to admin queue
-        if (ppCQueue[0]) {
-          ppCQueue[0]->setBase(
-              new PRPList(cfgdata, empty, nullptr,
-                          registers.adminCQueueBaseAddress,
-                          ppCQueue[0]->getSize() * cqstride, true),
-              cqstride);
-        }
-        if (ppSQueue[0]) {
-          ppSQueue[0]->setBase(
-              new PRPList(cfgdata, empty, nullptr,
-                          registers.adminSQueueBaseAddress,
-                          ppSQueue[0]->getSize() * sqstride, true),
-              sqstride);
+        // Fix admin queue sizes from AQA: SPDK may write base addresses
+        // before AQA, causing queues to be created with size 1.  Re-read
+        // AQA here so the queues and DMA regions get the correct size.
+        {
+          uint16_t acqs =
+              ((registers.adminQueueAttributes & 0x0FFF0000) >> 16) + 1;
+          uint16_t asqs =
+              (registers.adminQueueAttributes & 0x0FFF) + 1;
+          if (ppCQueue[0]) {
+            ppCQueue[0]->setSize(acqs);
+            ppCQueue[0]->setBase(
+                new PRPList(cfgdata, empty, nullptr,
+                            registers.adminCQueueBaseAddress,
+                            ppCQueue[0]->getSize() * cqstride, true),
+                cqstride);
+          }
+          if (ppSQueue[0]) {
+            ppSQueue[0]->setSize(asqs);
+            ppSQueue[0]->setBase(
+                new PRPList(cfgdata, empty, nullptr,
+                            registers.adminSQueueBaseAddress,
+                            ppSQueue[0]->getSize() * sqstride, true),
+                sqstride);
+          }
         }
 
         // Shotdown notification

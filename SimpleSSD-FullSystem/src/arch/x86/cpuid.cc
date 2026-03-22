@@ -161,8 +161,11 @@ namespace X86ISA {
                         stringToRegister(vendorString + 8));
                 break;
               case FamilyModelStepping:
+                // ECX 0x00000009 = SSE3 (bit 0) + MONITOR (bit 3).
+                // SSSE3 (bit 9) cleared: gem5 executes pshufb/palignr as
+                // no-ops, which silently corrupts glibc __memcpy_ssse3.
                 result = CpuidResult(0x00020f51, 0x00000805,
-                                     0xe7dbfbff, 0x00000209);
+                                     0xe7dbfbff, 0x00000009);
                 break;
               case ExtendedFeatures:
                 result = CpuidResult(0x00000000, 0x01800000,

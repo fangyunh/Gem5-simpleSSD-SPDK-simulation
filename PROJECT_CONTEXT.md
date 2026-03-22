@@ -259,17 +259,88 @@ across Python 2 and 3.
 
 ## 7. SimpleSSD Configuration (`fast_ssd.cfg`)
 
-The SSD is a ~512 GB NVMe drive modeled with:
+### 7.1 What SSD Are We Simulating?
+
+The configuration models a **Samsung 970 EVO-class NVMe SSD** with realistic MLC V-NAND
+timing. Key attributes:
+
+| Attribute | Value | Notes |
+|---|---|---|
+| **Form factor** | M.2 NVMe | PCIe Gen3 x4 interface (Gen2 x4 in config for gem5 compatibility) |
+| **Raw capacity** | 512 GB | 8ch × 4way × 2die × 2plane × 512blk × 512pg × 16KB |
+| **Usable capacity** | ~410 GB | 25% over-provisioning (OverProvisioningRatio=0.25) |
+| **NAND type** | MLC (2-bit) | NANDType=1. LSB + MSB pages, no CSB |
+| **NAND timing** | LSB read: 45 µs, MSB read: 65 µs | Realistic Samsung V-NAND MLC values |
+| **NAND write** | LSB: 500 µs, MSB: 1300 µs | |
+| **Block erase** | 3.5 ms | |
+| **DMA interface** | 400 MT/s, 8-bit (ONFi 3.x mode 7) | Per-channel NAND bus |
+| **Controller CPU** | 400 MHz, 3 cores (HIL+ICL+FTL) | Models ARM-class embedded processor |
+| **Host interface** | PCIe Gen2 × 4 lanes = 2 GB/s | SimpleSSD models Gen0/1/2 only |
+| **Internal bus** | AXI 128-bit @ 250 MHz = 4 GB/s | PCIe endpoint ↔ NVMe controller |
+| **DRAM cache** | 512 MiB, 8-way set-associative | LRU eviction, read+write caching |
+| **FTL** | Page-level mapping, CWDP allocation | Channel→Way→Die→Plane striping |
+| **FillRatio** | 0.5 | 50% of LBAs pre-filled so reads hit NAND |
+
+### 7.2 NAND Parallelism Structure
 
 ```
-Channel = 8,  Package = 4         → 32 packages total
-Die = 2,  Plane = 2,  Block = 512,  Page = 512,  PageSize = 16384 B
-Total capacity = 8×4×2×2×512×512×16384 ≈ 512 GB
-EnableMultiPlaneOperation = 1
+SSD
+├── Channel 0..7  (8 channels, fully independent buses)
+│   ├── Package/Way 0..3  (4 packages per channel, way-interleaved)
+│   │   ├── Die 0..1  (2 dies per package, die-interleaved)
+│   │   │   ├── Plane 0..1  (2 planes per die, multi-plane ops enabled)
+│   │   │   │   ├── Block 0..511  (512 blocks per plane)
+│   │   │   │   │   └── Page 0..511  (512 pages per block, 16 KB each)
 ```
 
-SimpleSSD runs 3 internal virtual CPUs (HIL, ICL, FTL) at 400 MHz each.
-These contribute significantly to simulation time.
+- **Total NAND targets:** 8 × 4 × 2 × 2 = 128 parallel units
+- **Total pages:** 33,554,432
+- **SuperblockSize = C** → superblocks span all channels (striping)
+- **PageAllocation = CWDP** → addresses are interleaved Channel → Way → Die → Plane
+
+### 7.3 Per-IO NAND Timing Breakdown (16 KB page read)
+
+All SimpleSSD timing is in **picoseconds**.
+
+| Stage | Duration | Description |
+|---|---|---|
+| dma0 (command transfer) | 16.7 ns | 7 read-cycle commands over 400 MT/s bus |
+| LSB cell sensing | 45 µs | NAND array read for lower page |
+| MSB cell sensing | 65 µs | NAND array read for upper page (slower) |
+| dma1 (data-out transfer) | 39.1 µs | 16 KB page data over 400 MT/s × 8-bit bus |
+| **Total (LSB page)** | **~84 µs** | dma0 + LSBRead + dma1 |
+| **Total (MSB page)** | **~104 µs** | dma0 + MSBRead + dma1 |
+
+With 8 independent channels, theoretical peak random read IOPS ≈ 8 / 84 µs ≈ **95K IOPS**.
+At QD=16, expect ~30–50K IOPS due to queueing and controller overhead.
+
+### 7.4 Controller Processing Pipeline
+
+SimpleSSD models the SSD controller as a 3-stage pipeline, each with a dedicated CPU core
+running at 400 MHz:
+
+| Core | Role | WorkInterval |
+|---|---|---|
+| **HIL** (Host Interface Layer) | NVMe command parsing, doorbell processing, CQE posting | 1 µs |
+| **ICL** (Internal Cache Layer) | DRAM cache lookup, read/write caching, prefetch | 1 µs |
+| **FTL** (Flash Translation Layer) | Logical→physical mapping, GC, wear leveling | 1 µs |
+
+Each core wakes every WorkInterval (1 µs) and processes up to MaxRequestCount (8) requests.
+This means an IO traverses at least 3 WorkInterval boundaries (~1.5 µs average wait each),
+adding ~4.5 µs of controller scheduling overhead on top of NAND timing.
+
+### 7.5 Config Units Reference
+
+All timing values in `fast_ssd.cfg` are in **picoseconds** (1 ps = 10⁻¹² s), matching
+SimpleSSD's internal simulation tick. Common conversions:
+
+| Config value | Actual time |
+|---|---|
+| 1,000 | 1 ns |
+| 1,000,000 | 1 µs |
+| 1,000,000,000 | 1 ms |
+| 45,000,000 | 45 µs (LSBRead) |
+| 3,500,000,000 | 3.5 ms (Erase) |
 
 ---
 
@@ -434,20 +505,134 @@ bash scripts/driver_phase1.sh \
 
 ---
 
-## 13. Phase 1 Results CSV Format
+## 13. Datasets and How to Interpret Them
 
-Written to `results/phase1_runs/<tag>/phase1_results.csv`. Key columns:
+The simulation produces **two complementary datasets** per run. Both are written via the
+9p shared filesystem and appear under `results/` on the host immediately.
 
-| Column | Description |
-|---|---|
-| QD | Queue depth per queue pair |
-| Qpairs | Number of NVMe queue pairs |
-| IO_Size | I/O size in bytes |
-| Run_ID | Repeat index |
-| IOPS | Total IOPS from `spdk_nvme_perf` Total line |
-| p50/p99/p99.9_Latency | Latency percentiles in µs |
-| Cycles_Per_IO | Host CPU cycles per I/O (perf stat) |
-| Submit_Logic_ns / Completion_Logic_ns / ... | SimpleSSD internal timing breakdowns |
+### 13.1 Summary CSV — `phase1_results.csv`
+
+**Location:** `results/phase1_runs/<tag>/<core>_<qp>/phase1_results.csv`
+**Granularity:** One row per (QD, IO_Size, Run_ID) combination — aggregated summary.
+**Source:** Parsed from `spdk_nvme_perf` stdout + `perf stat` output by `phase1_run.sh`.
+
+#### Column Reference
+
+| # | Column | Unit | Description | How to interpret |
+|---|---|---|---|---|
+| 1 | `QD` | count | Queue depth per queue pair | Higher QD → more parallelism at SSD |
+| 2 | `Qpairs` | count | Number of NVMe I/O queue pairs used | 1 = single-core test |
+| 3 | `IO_Size` | bytes | Size of each I/O request | 4096 or 16384 typically |
+| 4 | `Run_ID` | index | Repeat number (1-based) | For statistical variance across runs |
+| 5 | **`IOPS`** | IO/s | Throughput reported by SPDK | **Primary performance metric** |
+| 6 | `Cycles` | count | Total CPU cycles during measurement (perf stat) | 0 if perf unavailable (gem5 has no PMU) |
+| 7 | `Instructions` | count | Total CPU instructions (perf stat) | 0 if perf unavailable |
+| 8 | `LLC_Misses` | count | Last-level cache misses (perf stat) | 0 if perf unavailable |
+| 9 | `Dram_Read_Bytes` | bytes | Host DRAM reads (perf stat) | 0 if perf unavailable |
+| 10 | `Dram_Write_Bytes` | bytes | Host DRAM writes (perf stat) | 0 if perf unavailable |
+| 11 | `Energy_Joules` | J | CPU energy (perf stat) | 0 if perf unavailable |
+| 12 | **`Cycles_Per_IO`** | cycles/IO | CPU cost per I/O = Cycles / Completions | **Key research metric.** 0 when perf unavailable |
+| 13 | `Instr_Per_IO` | instr/IO | Instructions per I/O | 0 when perf unavailable |
+| 14 | `LLC_Misses_Per_IO` | misses/IO | Cache misses per I/O | 0 when perf unavailable |
+| 15-17 | `Dram_*_Per_IO`, `Energy_Per_IO` | various | Per-IO derived metrics | 0 when perf unavailable |
+| 18 | **`p50_Latency`** | µs | Median I/O latency | From SPDK's built-in histogram |
+| 19 | **`p99_Latency`** | µs | 99th percentile latency | Tail latency indicator |
+| 20 | **`p99.9_Latency`** | µs | 99.9th percentile latency | Extreme tail |
+| 21 | `Polls` | count | Total CQ poll calls during measurement | High polls with few completions → CPU spinning |
+| 22 | `Completions` | count | Total I/Os completed | = IOPS × measurement_time |
+| 23 | `Scans_Per_Completion` | ratio | Polls / Completions | How many polls per useful completion. High = idle spinning |
+| 24 | `Completions_Per_Call` | ratio | Completions / Polls | Inverse of above. Low = mostly empty polls |
+| 25 | `MMIO_Writes_Per_IO` | ratio | Doorbell MMIO writes per I/O | ~2.0 expected (1 SQ + 1 CQ doorbell) |
+| 26 | `Completions_Per_Poll_Hist` | string | Histogram of completions per poll call | Format: `"0:N0, 1:N1, 2:N2, ..."`. Bucket 0 = empty polls |
+| 27 | **`Submit_Logic_ns`** | ns | CPU time for full submit path (avg per IO) | From SPDK instrumentation: t_start → t_doorbell |
+| 28 | **`Completion_Logic_ns`** | ns | CPU time for full completion path (avg per IO) | From SPDK instrumentation: t_completion → t_end |
+| 29 | `Submit_Preamble_ns` | ns | Time before SQE construction begins | Function entry overhead |
+| 30 | `Tracker_Alloc_ns` | ns | NVMe tracker (CID) allocation | Memory allocation for request tracking |
+| 31 | `Addr_Xlate_ns` | ns | Virtual→physical address translation | PRP/SGL list construction |
+| 32 | `Cmd_Construct_ns` | ns | NVMe SQE (submission queue entry) construction | Filling the 64-byte command structure |
+| 33 | `Fence_ns` | ns | Memory fence before doorbell write | Ensures SQE is visible before doorbell |
+| 34 | `Doorbell_ns` | ns | Doorbell MMIO write duration | The actual PCIe MMIO write to SQ tail doorbell |
+| 35 | `CQE_Detect_ns` | ns | Time to detect CQE phase bit flip | Polling the completion queue |
+| 36 | `Tracker_Lookup_ns` | ns | Look up tracker by CID from CQE | Matching completion to original request |
+| 37 | `State_Dealloc_ns` | ns | Deallocate tracker + callback | Freeing CID and invoking completion callback |
+
+#### Important Notes
+
+- **Columns 6–17 are all zero** when running inside gem5 because gem5's simulated CPU
+  has no hardware PMU. The `perf stat` wrapper gracefully falls back to reporting zeros.
+  These columns become meaningful on real hardware or with gem5's optional PMU model.
+- **p50 ≈ p99** is expected when NAND FillRatio was 0.0 (empty SSD) because every IO
+  follows the same code path with deterministic timing. With FillRatio > 0, MSB vs LSB
+  page reads introduce latency variance.
+- **The gap between Submit_Logic_ns + Completion_Logic_ns and p50_Latency** is the
+  **device processing time** (doorbell → completion interrupt). This is where NAND access,
+  controller pipeline, and PCIe DMA happen — it's the SSD's contribution to latency.
+
+### 13.2 Per-IO Cycle Breakdown CSV — `cycle_breakdown_s<size>_q<qd>_r<run>.csv`
+
+**Location:** `results/phase1_runs/<tag>/<core>_<qp>/logs/cycle_breakdown_*.csv`
+**Granularity:** One row per individual I/O operation — fine-grained per-request detail.
+**Source:** SPDK instrumentation ring buffer (`spdk/lib/nvme/nvme_qpair.c`), dumped on
+exit via `atexit(nvme_io_cycle_dump)`. Uses `rdtsc` timestamps converted to nanoseconds.
+
+#### Column Reference
+
+| # | Column | Unit | Description | How to interpret |
+|---|---|---|---|---|
+| 1 | `cid` | ID | NVMe command ID (CID) | Identifies the request in the NVMe queue |
+| 2 | `qid` | ID | NVMe queue pair ID | 0 = admin queue, typically all on qid 0 for single-qpair tests |
+| 3 | **`t_start`** | ticks | rdtsc timestamp at IO submit entry | Absolute tick count; use differences, not raw values |
+| 4 | `t_sqe_copy` | ticks | After SQE copied to submission ring | |
+| 5 | **`t_doorbell`** | ticks | After doorbell MMIO write | End of software submit path |
+| 6 | **`t_completion`** | ticks | CQE detected (phase bit flipped) | End of device processing; start of software completion |
+| 7 | **`t_end`** | ticks | After completion callback returns | End of full IO lifecycle |
+| 8 | `t_poll_cycles` | ticks | Cumulative cycles spent polling for this IO | Between doorbell and completion detection |
+| 9 | `submit_ns` | ns | **t_start → t_doorbell** | Total software submit overhead |
+| 10 | `completion_ns` | ns | **t_completion → t_end** | Total software completion overhead |
+| 11 | `submit_preamble_ns` | ns | Function entry overhead | |
+| 12 | `tracker_alloc_ns` | ns | CID allocation | |
+| 13 | `addr_xlate_ns` | ns | Address translation (PRP list) | |
+| 14 | `cmd_construct_ns` | ns | SQE construction | |
+| 15 | `fence_ns` | ns | Memory barrier | |
+| 16 | `doorbell_ns` | ns | Doorbell MMIO write | |
+| 17 | `cqe_detect_ns` | ns | CQE detection | |
+| 18 | `tracker_lookup_ns` | ns | CID lookup from CQE | |
+| 19 | `state_dealloc_ns` | ns | Tracker deallocation + callback | |
+
+#### Derived Metrics (compute from raw columns)
+
+| Metric | Formula | Meaning |
+|---|---|---|
+| **Device latency** | `(t_completion - t_doorbell) / ticks_per_ns` | Time the IO spent inside the SSD (NAND + controller + PCIe DMA). This is the **dominant** component (~99.5% of total). |
+| **Total IO latency** | `(t_end - t_start) / ticks_per_ns` | End-to-end from submit call to completion callback |
+| **Software overhead** | `submit_ns + completion_ns` | CPU time spent in driver code (typically <1 µs) |
+| **ticks_per_ns** | Compute from `submit_ns` and tick deltas | For this sim: **2.0 ticks/ns** (gem5 2 GHz tick rate). Verify: `(t_doorbell - t_start) / submit_ns` |
+
+#### Important Notes
+
+- **Only the last N IOs are recorded** (ring buffer size = 100,000). For short runs, all
+  IOs are captured. For longer runs, only the tail end is kept.
+- **First 1–2 rows are cold-start outliers** with inflated `completion_ns` (cache warming,
+  first TLB miss, etc.). Skip them for steady-state analysis.
+- **The `state_dealloc_ns` column** in the first IO is often very large (~23 µs) because
+  it includes the initial cache-cold penalty. Steady-state values are ~74 ns.
+
+### 13.3 gem5 Stats — `SimpleSSD-FullSystem/m5out/stats.txt`
+
+**Generated by:** gem5 at simulation end (or `m5 exit`).
+**Key SimpleSSD counters to verify:**
+
+| Stat | Meaning | What to check |
+|---|---|---|
+| `system.pc.nvme.command_count` | Total NVMe commands processed | Should ≈ Completions from CSV |
+| `system.pc.nvme.bytes` | Total data transferred | Should = Completions × IO_Size |
+| `system.pc.nvme.busy` | Total device busy time (ps) | Divide by command_count for per-IO device time |
+| `system.pc.nvme.pal.read.count` | NAND read operations | **Must be > 0 if FillRatio > 0**. If 0, reads are hitting cache or unmapped LBAs |
+| `system.pc.nvme.pal.read.time.total` | Average NAND read time | Should match LSBRead/MSBRead + DMA timing |
+| `system.pc.nvme.icl.generic_cache.read.from_cache` | Cache hits | High value = reads served from DRAM cache, not NAND |
+| `system.pc.nvme.icl.generic_cache.read.request_count` | Total read requests to ICL | Should ≈ command_count |
+| `system.pc.nvme.dram.write.request_count` | DRAM cache fills | Each cache miss triggers a DRAM write |
+| `system.pc.nvme.ftl.page_mapping.gc.count` | Garbage collection events | Should be 0 for read-only workloads |
 
 ---
 

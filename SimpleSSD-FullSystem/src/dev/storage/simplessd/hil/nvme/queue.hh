@@ -121,6 +121,7 @@ class Queue {
   uint16_t getHead();
   uint16_t getTail();
   uint16_t getSize();
+  void setSize(uint16_t);
   void setBase(DMAInterface *, uint64_t);
 };
 

@@ -10,9 +10,9 @@ ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 DOCKER_IMAGE=${DOCKER_IMAGE:-"ubuntu:18.04"}
 SPDK_DIR_IN_CONTAINER=${SPDK_DIR_IN_CONTAINER:-"/work/spdk"}
 DOCKER_OUT_DIR=${DOCKER_OUT_DIR:-"$ROOT_DIR/docker_artifacts"}
-SPDK_TARGET_ARCH=${SPDK_TARGET_ARCH:-"core2"}
+SPDK_TARGET_ARCH=${SPDK_TARGET_ARCH:-"x86-64"}
 DPDK_PLATFORM=${DPDK_PLATFORM:-"generic"}
-DPDK_EXTRA_CFLAGS=${DPDK_EXTRA_CFLAGS:-"-mssse3 -mno-sse4.1 -mno-sse4.2 -mno-avx -mno-avx2 -mno-avx512f"}
+DPDK_EXTRA_CFLAGS=${DPDK_EXTRA_CFLAGS:-"-mno-ssse3 -mno-sse4.1 -mno-sse4.2 -mno-avx -mno-avx2 -mno-avx512f"}
 SPDK_CONFIGURE_FLAGS=${SPDK_CONFIGURE_FLAGS:-"--disable-tests --disable-unit-tests --disable-examples"}
 DPDK_ENABLE_LIBS_DEFAULT="eal,hash,log,mbuf,mempool,pci,ring,argparse,cmdline,ethdev,kvargs,meter,net,rcu,stack,telemetry,power,timer,vhost,cryptodev,dmadev"
 DPDK_ENABLE_LIBS=${DPDK_ENABLE_LIBS:-"$DPDK_ENABLE_LIBS_DEFAULT"}
@@ -154,6 +154,46 @@ if not any(line.strip() == guard[0] for line in lines):
 
 path.write_text("\n".join(lines) + "\n")
 PY
+# Patch rte_memcpy.h to use plain memcpy (avoid SSSE3 palignr)
+python3 - <<'PY_MEMCPY'
+from pathlib import Path
+import re
+
+path = Path("dpdk/lib/eal/x86/include/rte_memcpy.h")
+text = path.read_text()
+
+# Replace the inline rte_memcpy with plain memcpy
+new_text = re.sub(
+    r"static __rte_always_inline void \*[\n\r]*rte_memcpy.*?\{.*?\}",
+    """static __rte_always_inline void *
+rte_memcpy(void *dst, const void *src, size_t n)
+{
+\treturn memcpy(dst, src, n);
+}""",
+    text,
+    count=1,
+    flags=re.DOTALL,
+)
+path.write_text(new_text)
+PY_MEMCPY
+
+# Remove SSSE3 from DPDK base_flags so rte_cpu_is_supported() passes
+python3 - <<'PY_MESON'
+from pathlib import Path
+
+path = Path("dpdk/config/x86/meson.build")
+text = path.read_text()
+
+# Remove the line containing \x27ssse3\x27 from base_flags array
+lines = text.splitlines()
+out = []
+for line in lines:
+    if "\x27ssse3\x27" in line.lower() or "'ssse3'" in line.lower():
+        continue
+    out.append(line)
+path.write_text("\n".join(out) + "\n")
+PY_MESON
+
     rm -rf build dpdk/build dpdk/build-tmp
     ./configure --without-nvme-cuse --target-arch="$SPDK_TARGET_ARCH" $SPDK_CONFIGURE_FLAGS
     if grep -q "^CONFIG_APPS=n" mk/config.mk; then
