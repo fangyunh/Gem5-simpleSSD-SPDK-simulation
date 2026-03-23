@@ -51,7 +51,7 @@ NVMeInterface::NVMeInterface(Params *p)
     return;
   }
 
-  conf = initSimpleSSDEngine(this, &std::cout, &std::cerr, configPath);
+  conf = initSimpleSSDEngine(this, nullptr, &std::cerr, configPath);
 
   pcieGen = (SimpleSSD::PCIExpress::PCIE_GEN)conf.readInt(
       SimpleSSD::CONFIG_NVME, SimpleSSD::HIL::NVMe::NVME_PCIE_GEN);
