@@ -303,12 +303,19 @@ void Controller::writeRegister(uint64_t offset, uint64_t size, uint8_t *buffer,
           }
         }
 
-        // Shotdown notification
+        // Shutdown notification
         if (registers.configuration & 0x0000C000) {
-          registers.status &= 0xFFFFFFF2;  // RDY = 1
+          registers.status &= 0xFFFFFFF2;  // Clear RDY and SHST
           registers.status |= 0x00000005;  // Shutdown processing occurring
 
           shutdownReserved = true;
+
+          // Ensure workEvent is scheduled so work() can finalize shutdown.
+          // Without this, a re-triggered shutdown after a prior deschedule
+          // would leave SHST stuck at 01 (processing) forever.
+          if (!scheduled(workEvent)) {
+            schedule(workEvent, getTick() + workInterval);
+          }
         }
         // If EN = 1, Set CSTS.RDY = 1
         else if (registers.configuration & 0x00000001) {
@@ -1568,6 +1575,11 @@ void Controller::work() {
 
       registers.status &= 0xFFFFFFF2;  // RDY = 0
       registers.status |= 0x00000008;  // Shutdown processing complete
+
+      // Clear CC.SHN so a subsequent CC read returns SHN=00.
+      // Without this, the next SPDK process reads stale SHN=01
+      // and re-triggers shutdown when it writes CC back.
+      registers.configuration &= ~0x0000C000u;
 
       shutdownReserved = false;
 
