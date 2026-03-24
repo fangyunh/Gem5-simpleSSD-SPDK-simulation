@@ -68,10 +68,6 @@ void EventEngine::scheduleEvent(SimpleSSD::Event eid, uint64_t tick) {
     }
 
     if (iter->second.scheduled()) {
-      SimpleSSD::warn("Event %" PRIu64 " rescheduled from %" PRIu64
-                      " to %" PRIu64,
-                      eid, iter->second.when(), tick);
-
       pObject->reschedule(iter->second, tick);
     } else {
       pObject->schedule(iter->second, tick);
