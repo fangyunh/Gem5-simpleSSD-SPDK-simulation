@@ -36,8 +36,8 @@ DISABLE_COW=0
 CORES="0"
 CORE_MASKS=""
 QPAIRS="1"
-QD_LIST="16 32 64 128"
-IO_SIZES="4096 16384"
+QD_LIST="16"
+IO_SIZES="4096"
 REPEATS=1
 STEADY_TIME=30
 RUN_TAG="phase1_run_$(date +%Y%m%d_%H%M%S)"
@@ -48,6 +48,12 @@ PCI_CHECK=0
 PERF_ENABLE=1
 SKIP_SETUP=0
 HUGEMEM_MB=1024
+
+# I/O uncore batching knobs
+UNCORE_MODE=0
+CQ_BATCH_N=8
+CQ_BATCH_T=4000000
+DB_BATCH_B=4
 
 # host share for virtio-9p (readfile mode), auto-enabled by default
 VIO_9P=0
@@ -103,6 +109,10 @@ Options:
   --perf-enable 0|1       Enable perf counters (default: $PERF_ENABLE)
   --skip-setup 0|1        Skip SPDK setup.sh (default: $SKIP_SETUP)
   --hugemem-mb N          Hugepage MB (default: $HUGEMEM_MB)
+  --uncore-mode N         Uncore mode: 0=disabled 1=Mode_A (default: $UNCORE_MODE)
+  --cq-batch-n N          CQ batch count threshold (default: $CQ_BATCH_N)
+  --cq-batch-t N          CQ batch timeout picoseconds (default: $CQ_BATCH_T)
+  --db-batch-b N          Doorbell batch SQE threshold (default: $DB_BATCH_B)
   --vio-9p 0|1            Enable virtio-9p share (default: $VIO_9P)
   --auto-9p 0|1           Auto-enable virtio-9p for readfile mode (default: $AUTO_VIO_9P)
   --host-share PATH       Host path to share via virtio-9p (default: $HOST_SHARE)
@@ -172,6 +182,10 @@ while [[ $# -gt 0 ]]; do
     --perf-enable) PERF_ENABLE="$2"; shift 2 ;;
     --skip-setup) SKIP_SETUP="$2"; shift 2 ;;
     --hugemem-mb) HUGEMEM_MB="$2"; shift 2 ;;
+    --uncore-mode) UNCORE_MODE="$2"; shift 2 ;;
+    --cq-batch-n)  CQ_BATCH_N="$2";  shift 2 ;;
+    --cq-batch-t)  CQ_BATCH_T="$2";  shift 2 ;;
+    --db-batch-b)  DB_BATCH_B="$2";  shift 2 ;;
     --vio-9p) VIO_9P="$2"; shift 2 ;;
     --auto-9p) AUTO_VIO_9P="$2"; shift 2 ;;
     --host-share) HOST_SHARE="$2"; shift 2 ;;
@@ -245,6 +259,10 @@ write_metadata() {
   "perf_enable": $PERF_ENABLE,
   "skip_setup": $SKIP_SETUP,
   "hugemem_mb": $HUGEMEM_MB,
+  "uncore_mode": $UNCORE_MODE,
+  "cq_batch_n":  $CQ_BATCH_N,
+  "cq_batch_t":  $CQ_BATCH_T,
+  "db_batch_b":  $DB_BATCH_B,
   "vio_9p": $VIO_9P,
   "auto_vio_9p": $AUTO_VIO_9P,
   "host_share": "$HOST_SHARE",
@@ -278,6 +296,10 @@ write_log_header() {
     echo "perf_enable: $PERF_ENABLE"
     echo "skip_setup: $SKIP_SETUP"
     echo "hugemem_mb: $HUGEMEM_MB"
+    echo "uncore_mode: $UNCORE_MODE"
+    echo "cq_batch_n: $CQ_BATCH_N"
+    echo "cq_batch_t: $CQ_BATCH_T"
+    echo "db_batch_b: $DB_BATCH_B"
     echo "vio_9p: $VIO_9P"
     echo "auto_vio_9p: $AUTO_VIO_9P"
     echo "host_share: $HOST_SHARE"
@@ -574,6 +596,21 @@ EOF
   echo "$script_path"
 }
 
+patch_ssd_config() {
+  local cfg="${SSD_CONFIG:-$ROOT_DIR/fast_ssd.cfg}"
+  if [ ! -f "$cfg" ]; then
+    echo "WARNING: SSD config not found: $cfg; skipping uncore knob patch." >&2
+    return 0
+  fi
+  sed -i -E \
+    -e "s|^(UncoreMode)[[:space:]]*=.*|\1     = $UNCORE_MODE|" \
+    -e "s|^(CQBatchN)[[:space:]]*=.*|\1       = $CQ_BATCH_N|" \
+    -e "s|^(CQBatchT)[[:space:]]*=.*|\1       = $CQ_BATCH_T|" \
+    -e "s|^(DBBatchB)[[:space:]]*=.*|\1       = $DB_BATCH_B|" \
+    "$cfg"
+  echo "Patched SSD config: $cfg [UncoreMode=$UNCORE_MODE CQBatchN=$CQ_BATCH_N CQBatchT=$CQ_BATCH_T DBBatchB=$DB_BATCH_B]"
+}
+
 run_auto() {
   if [ -z "$TMUX_BIN" ]; then
     echo "tmux not found. Install tmux or run with manual options." >&2
@@ -585,6 +622,7 @@ run_auto() {
     exit 1
   fi
 
+  patch_ssd_config
   write_metadata
   write_log_header
 
@@ -721,6 +759,7 @@ if [ "$AUTO" -eq 1 ]; then
 fi
 
 if [ "$BOOT" -eq 1 ]; then
+  patch_ssd_config
   KERNEL="$KERNEL" DISK_IMAGE="$DISK_IMAGE" MEM_SIZE="$MEM_SIZE" SSD_CONFIG="$SSD_CONFIG" CHECKPOINT_DIR="$CHECKPOINT_DIR" \
     "$SCRIPT_DIR/boot_gem5.sh" start
 fi
