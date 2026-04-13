@@ -1,0 +1,9 @@
+# .synopsys_dc.setup — DC configuration for IO-Uncore with ASAP7
+set_app_var target_library asap7sc7p5t_AO_RVT_TT_nldm_211120.db
+set_app_var symbol_library asap7sc7p5t.sdb
+set_app_var synthetic_library dw_foundation.sldb
+set_app_var link_library "* $target_library $synthetic_library"
+set_app_var search_path [concat $search_path ./src ./lib]
+set_app_var designer "IO-Uncore Phase 3"
+alias h history
+alias rc "report_constraint -all_violators"
