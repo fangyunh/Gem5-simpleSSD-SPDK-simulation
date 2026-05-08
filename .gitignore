@@ -1,1 +1,33 @@
+# Large binaries / out-of-band assets (transferred via upload_large_files.sh)
 assets/
+
+# Build artifacts
+SimpleSSD-FullSystem/build/
+
+# Claude Code / Superpowers (local AI tooling, not part of the project)
+CLAUDE.md
+.claude/
+.superpowers/
+docs/superpowers/
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Local logs and results (regenerated per run)
+logs/
+results/
+command.log
+*.log
+
+# Local backups and config variants
+backup_baseline/
+*.bak
+fast_ssd(*).cfg
+!fast_ssd.cfg
+
+# Scratch
+test.txt
+
+# Synthesis/tooling temp dirs
+RTL_design/_tmp_yosys-abc-*/
