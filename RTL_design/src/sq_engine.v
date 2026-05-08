@@ -6,7 +6,7 @@ module sq_engine #(
     parameter NUM_QUEUES      = 16,
     parameter QUEUE_DEPTH     = 64,
     parameter SRAM_ADDR_WIDTH = 20,
-    parameter DATA_WIDTH      = 128,
+    parameter DATA_WIDTH      = 512,
     parameter LBA_SIZE        = 4096,
     parameter MAX_TRANSFER    = 131072, // 128KB
     parameter MAILBOX_BASE    = 16'h2100,
@@ -88,12 +88,11 @@ module sq_engine #(
     reg [PW-1:0] prp_count;
 
     // SQ SRAM base = 0 (SQ buffers start at address 0)
-    // Each SQE = 64B = 4 x 128b words. But we write in a simplified way.
-    // For the SRAM model, each SQE occupies 4 consecutive 128b addresses.
-    // SQE addr = (qid * QUEUE_DEPTH + cid) * 4
+    // With 512b bus, each 64B SQE = 1 SRAM word.
+    // SQE addr = qid * QUEUE_DEPTH + cid
 
-    // PRP SRAM base = after SQ + CQ regions
-    localparam PRP_SRAM_BASE = NUM_QUEUES * QUEUE_DEPTH * 4  // SQ region
+    // PRP SRAM base = after SQ + CQ regions (each NQ*QD words at 512b)
+    localparam PRP_SRAM_BASE = NUM_QUEUES * QUEUE_DEPTH      // SQ region
                               + NUM_QUEUES * QUEUE_DEPTH;     // CQ region
 
     // Stat flags
@@ -113,7 +112,7 @@ module sq_engine #(
 
     integer i;
 
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             state <= S_IDLE;
             cur_qid <= 0;
@@ -248,13 +247,31 @@ module sq_engine #(
                 end
 
                 S_INJECT: begin
-                    // Write SQE to SRAM
+                    // Write full 64B SQE to SRAM in a single cycle (512b bus)
                     sram_req <= 1;
                     sram_wr  <= 1;
-                    // SQE base address: (qid * QD + cid) * 4 (4 words per SQE)
-                    sram_addr <= {{(SRAM_ADDR_WIDTH-QW-DW-2){1'b0}}, cur_qid, cur_cid, 2'b00};
-                    // Pack key fields into first 128b word
-                    sram_wdata <= {cur_prp2, cur_prp1}; // PRP1 + PRP2
+                    // SQE address: qid * QD + cid (one 512b word per SQE)
+                    sram_addr <= {{(SRAM_ADDR_WIDTH-QW-DW){1'b0}}, cur_qid, cur_cid};
+                    // Pack NVMe SQE fields into 512b word (LSB-first)
+                    //  [  7:  0] opcode      [ 15:  8] flags
+                    //  [ 31: 16] cid         [ 63: 32] nsid (zero-extended)
+                    //  [127: 64] reserved    [191:128] mptr
+                    //  [255:192] PRP1        [319:256] PRP2
+                    //  [383:320] SLBA        [399:384] NLB
+                    //  [511:400] reserved
+                    sram_wdata <= {
+                        112'd0,                                // [511:400] reserved
+                        cur_nlb,                                // [399:384] NLB
+                        cur_lba,                                // [383:320] SLBA
+                        cur_prp2,                               // [319:256] PRP2
+                        cur_prp1,                               // [255:192] PRP1
+                        64'd0,                                  // [191:128] mptr
+                        64'd0,                                  // [127: 64] reserved
+                        {16'd0, cur_nsid},                      // [ 63: 32] nsid
+                        {{(16-DW){1'b0}}, cur_cid},             // [ 31: 16] cid
+                        cur_flags,                              // [ 15:  8] flags
+                        cur_opcode                              // [  7:  0] opcode
+                    };
 
                     if (sram_grant) begin
                         credit_dec  <= 1;

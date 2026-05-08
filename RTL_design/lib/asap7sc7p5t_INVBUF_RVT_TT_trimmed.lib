@@ -1,0 +1,1489 @@
+/*
+BSD 3-Clause License
+
+Copyright 2020 Lawrence T. Clark, Vinay Vashishtha, or Arizona State
+University
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+contributors may be used to endorse or promote products derived from this
+software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+*/
+
+library (asap7sc7p5t_INVBUF_RVT_TT_nldm_211120) {
+  /* Models written by Liberate 18.1.0.293 from Cadence Design Systems, Inc. on Mon Dec  7 13:57:04 MST 2020 */
+  comment : "";
+  date : "$Date: Mon Dec  7 13:53:54 2020 $";
+  revision : "1.0";
+  delay_model : table_lookup;
+  capacitive_load_unit (1,ff);
+  current_unit : "1mA";
+  leakage_power_unit : "1pW";
+  pulling_resistance_unit : "1kohm";
+  time_unit : "1ps";
+  voltage_unit : "1V";
+  voltage_map (VDD, 0.7);
+  voltage_map (VSS, 0);
+  voltage_map (GND, 0);
+  default_cell_leakage_power : 0;
+  default_fanout_load : 1;
+  default_max_transition : 320;
+  default_output_pin_cap : 0;
+  in_place_swap_mode : match_footprint;
+  input_threshold_pct_fall : 50;
+  input_threshold_pct_rise : 50;
+  nom_process : 1;
+  nom_temperature : 25;
+  nom_voltage : 0.7;
+  output_threshold_pct_fall : 50;
+  output_threshold_pct_rise : 50;
+  slew_derate_from_library : 1;
+  slew_lower_threshold_pct_fall : 10;
+  slew_lower_threshold_pct_rise : 10;
+  slew_upper_threshold_pct_fall : 90;
+  slew_upper_threshold_pct_rise : 90;
+  operating_conditions (PVT_0P7V_25C) {
+    process : 1;
+    temperature : 25;
+    voltage : 0.7;
+  }
+  default_operating_conditions : PVT_0P7V_25C;
+  lu_table_template (constraint_template_7x7) {
+    variable_1 : constrained_pin_transition;
+    variable_2 : related_pin_transition;
+    index_1 ("5, 10, 20, 40, 80, 160, 320");
+    index_2 ("5, 10, 20, 40, 80, 160, 320");
+  }
+  lu_table_template (delay_template_7x7_x1) {
+    variable_1 : input_net_transition;
+    variable_2 : total_output_net_capacitance;
+    index_1 ("5, 10, 20, 40, 80, 160, 320");
+    index_2 ("0.72, 1.44, 2.88, 5.76, 11.52, 23.04, 46.08");
+  }
+  lu_table_template (mpw_constraint_template_7x7) {
+    variable_1 : constrained_pin_transition;
+    index_1 ("5, 10, 20, 40, 80, 160, 320");
+  }
+  power_lut_template (passive_power_template_7x1_x1) {
+    variable_1 : input_transition_time;
+    index_1 ("5, 10, 20, 40, 80, 160, 320");
+  }
+  power_lut_template (power_template_7x7_x1) {
+    variable_1 : input_transition_time;
+    variable_2 : total_output_net_capacitance;
+    index_1 ("5, 10, 20, 40, 80, 160, 320");
+    index_2 ("0.72, 1.44, 2.88, 5.76, 11.52, 23.04, 46.08");
+  }
+  lu_table_template (waveform_template_name) {
+    variable_1 : input_net_transition;
+    variable_2 : normalized_voltage;
+    index_1 ("0, 1000, 2000, 3000, 4000, 5000, 6000");
+    index_2 ("0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16");
+  }
+  input_voltage (default_VDD_VSS_input) {
+    vil : 0;
+    vih : 0.7;
+    vimin : 0;
+    vimax : 0.7;
+  }
+  output_voltage (default_VDD_VSS_output) {
+    vol : 0;
+    voh : 0.7;
+    vomin : 0;
+    vomax : 0.7;
+  }
+  normalized_driver_waveform (waveform_template_name) {
+    driver_waveform_name : "PreDriver20.5:rise";
+    index_1 ("5, 10, 20, 40, 80, 160, 320");
+    index_2 ("0, 0.03, 0.1, 0.158744, 0.221271, 0.279374, 0.333513, 0.3841, 0.437223, 0.533203, 0.58153, 0.626864, 0.717883, 0.806555, 0.9, 0.958983, 1");
+    values ( \
+      "0, 0.375, 0.625, 0.84375, 1.09375, 1.34375, 1.59375, 1.84375, 2.125, 2.6875, 3, 3.3125, 4, 4.75, 5.625, 6.21875, 6.65625", \
+      "0, 0.75, 1.25, 1.6875, 2.1875, 2.6875, 3.1875, 3.6875, 4.25, 5.375, 6, 6.625, 8, 9.5, 11.25, 12.4375, 13.3125", \
+      "0, 1.5, 2.5, 3.375, 4.375, 5.375, 6.375, 7.375, 8.5, 10.75, 12, 13.25, 16, 19, 22.5, 24.875, 26.625", \
+      "0, 3, 5, 6.75, 8.75, 10.75, 12.75, 14.75, 17, 21.5, 24, 26.5, 32, 38, 45, 49.75, 53.25", \
+      "0, 6, 10, 13.5, 17.5, 21.5, 25.5, 29.5, 34, 43, 48, 53, 64, 76, 90, 99.5, 106.5", \
+      "0, 12, 20, 27, 35, 43, 51, 59, 68, 86, 96, 106, 128, 152, 180, 199, 213", \
+      "0, 24, 40, 54, 70, 86, 102, 118, 136, 172, 192, 212, 256, 304, 360, 398, 426" \
+    );
+  }
+  normalized_driver_waveform (waveform_template_name) {
+    driver_waveform_name : "PreDriver20.5:fall";
+    index_1 ("5, 10, 20, 40, 80, 160, 320");
+    index_2 ("0, 0.03, 0.1, 0.158744, 0.221271, 0.279374, 0.333513, 0.3841, 0.437223, 0.533203, 0.58153, 0.626864, 0.717883, 0.806555, 0.9, 0.958983, 1");
+    values ( \
+      "0, 0.375, 0.625, 0.84375, 1.09375, 1.34375, 1.59375, 1.84375, 2.125, 2.6875, 3, 3.3125, 4, 4.75, 5.625, 6.21875, 6.65625", \
+      "0, 0.75, 1.25, 1.6875, 2.1875, 2.6875, 3.1875, 3.6875, 4.25, 5.375, 6, 6.625, 8, 9.5, 11.25, 12.4375, 13.3125", \
+      "0, 1.5, 2.5, 3.375, 4.375, 5.375, 6.375, 7.375, 8.5, 10.75, 12, 13.25, 16, 19, 22.5, 24.875, 26.625", \
+      "0, 3, 5, 6.75, 8.75, 10.75, 12.75, 14.75, 17, 21.5, 24, 26.5, 32, 38, 45, 49.75, 53.25", \
+      "0, 6, 10, 13.5, 17.5, 21.5, 25.5, 29.5, 34, 43, 48, 53, 64, 76, 90, 99.5, 106.5", \
+      "0, 12, 20, 27, 35, 43, 51, 59, 68, 86, 96, 106, 128, 152, 180, 199, 213", \
+      "0, 24, 40, 54, 70, 86, 102, 118, 136, 172, 192, 212, 256, 304, 360, 398, 426" \
+    );
+  }
+  normalized_driver_waveform (waveform_template_name) {
+    index_1 ("5, 10, 20, 40, 80, 160, 320");
+    index_2 ("0, 0.03, 0.1, 0.158744, 0.221271, 0.279374, 0.333513, 0.3841, 0.437223, 0.533203, 0.58153, 0.626864, 0.717883, 0.806555, 0.9, 0.958983, 1");
+    values ( \
+      "0, 0.375, 0.625, 0.84375, 1.09375, 1.34375, 1.59375, 1.84375, 2.125, 2.6875, 3, 3.3125, 4, 4.75, 5.625, 6.21875, 6.65625", \
+      "0, 0.75, 1.25, 1.6875, 2.1875, 2.6875, 3.1875, 3.6875, 4.25, 5.375, 6, 6.625, 8, 9.5, 11.25, 12.4375, 13.3125", \
+      "0, 1.5, 2.5, 3.375, 4.375, 5.375, 6.375, 7.375, 8.5, 10.75, 12, 13.25, 16, 19, 22.5, 24.875, 26.625", \
+      "0, 3, 5, 6.75, 8.75, 10.75, 12.75, 14.75, 17, 21.5, 24, 26.5, 32, 38, 45, 49.75, 53.25", \
+      "0, 6, 10, 13.5, 17.5, 21.5, 25.5, 29.5, 34, 43, 48, 53, 64, 76, 90, 99.5, 106.5", \
+      "0, 12, 20, 27, 35, 43, 51, 59, 68, 86, 96, 106, 128, 152, 180, 199, 213", \
+      "0, 24, 40, 54, 70, 86, 102, 118, 136, 172, 192, 212, 256, 304, 360, 398, 426" \
+    );
+  }
+  cell (BUFx10_ASAP7_75t_R) {
+area : 0.20412
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 368.64;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 1.20694;
+      rise_capacitance : 1.20694;
+      rise_capacitance_range (0.904988, 1.20694);
+      fall_capacitance : 1.20673;
+      fall_capacitance_range (0.898858, 1.20673);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (BUFx12_ASAP7_75t_R) {
+area : 0.23328
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 368.64;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 1.20393;
+      rise_capacitance : 1.20393;
+      rise_capacitance_range (0.901425, 1.20393);
+      fall_capacitance : 1.20365;
+      fall_capacitance_range (0.896251, 1.20365);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (BUFx12f_ASAP7_75t_R) {
+area : 0.26244
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 368.64;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 2.34288;
+      rise_capacitance : 2.34288;
+      rise_capacitance_range (1.78749, 2.34288);
+      fall_capacitance : 2.34141;
+      fall_capacitance_range (1.76426, 2.34141);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (BUFx16f_ASAP7_75t_R) {
+area : 0.32076
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 737.28;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 2.34187;
+      rise_capacitance : 2.34154;
+      rise_capacitance_range (1.69706, 2.34154);
+      fall_capacitance : 2.34187;
+      fall_capacitance_range (1.68833, 2.34187);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (BUFx24_ASAP7_75t_R) {
+area : 0.4374
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 1474.56;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 2.35026;
+      rise_capacitance : 2.34978;
+      rise_capacitance_range (1.76355, 2.34978);
+      fall_capacitance : 2.35026;
+      fall_capacitance_range (1.74299, 2.35026);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (BUFx2_ASAP7_75t_R) {
+area : 0.0729
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 92.16;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.534279;
+      rise_capacitance : 0.534279;
+      rise_capacitance_range (0.399338, 0.534279);
+      fall_capacitance : 0.53423;
+      fall_capacitance_range (0.394041, 0.53423);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (BUFx3_ASAP7_75t_R) {
+area : 0.08748
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 92.16;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.62959;
+      rise_capacitance : 0.62959;
+      rise_capacitance_range (0.469072, 0.62959);
+      fall_capacitance : 0.629566;
+      fall_capacitance_range (0.460848, 0.629566);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (BUFx4_ASAP7_75t_R) {
+area : 0.10206
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 184.32;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.538751;
+      rise_capacitance : 0.538751;
+      rise_capacitance_range (0.399823, 0.538751);
+      fall_capacitance : 0.538594;
+      fall_capacitance_range (0.395309, 0.538594);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (BUFx4f_ASAP7_75t_R) {
+area : 0.11664
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 184.32;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 1.00419;
+      rise_capacitance : 1.00419;
+      rise_capacitance_range (0.742197, 1.00419);
+      fall_capacitance : 1.00375;
+      fall_capacitance_range (0.740418, 1.00375);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (BUFx5_ASAP7_75t_R) {
+area : 0.11664
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 184.32;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.629797;
+      rise_capacitance : 0.629797;
+      rise_capacitance_range (0.46245, 0.629797);
+      fall_capacitance : 0.629373;
+      fall_capacitance_range (0.455135, 0.629373);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (BUFx6f_ASAP7_75t_R) {
+area : 0.1458
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 184.32;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 1.20287;
+      rise_capacitance : 1.20169;
+      rise_capacitance_range (0.912318, 1.20169);
+      fall_capacitance : 1.20287;
+      fall_capacitance_range (0.90279, 1.20287);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (BUFx8_ASAP7_75t_R) {
+area : 0.17496
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 368.64;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.852045;
+      rise_capacitance : 0.852045;
+      rise_capacitance_range (0.645539, 0.852045);
+      fall_capacitance : 0.850973;
+      fall_capacitance_range (0.642289, 0.850973);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (CKINVDCx10_ASAP7_75t_R) {
+area : 0.34992
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 737.28;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 6.03525;
+      rise_capacitance : 6.03525;
+      rise_capacitance_range (4.32838, 6.03525);
+      fall_capacitance : 6.03322;
+      fall_capacitance_range (4.31095, 6.03322);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (CKINVDCx11_ASAP7_75t_R) {
+area : 0.37908
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 737.28;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 6.83522;
+      rise_capacitance : 6.83522;
+      rise_capacitance_range (4.884, 6.83522);
+      fall_capacitance : 6.83372;
+      fall_capacitance_range (4.86109, 6.83372);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (CKINVDCx12_ASAP7_75t_R) {
+area : 0.37908
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 737.28;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 7.21805;
+      rise_capacitance : 7.21608;
+      rise_capacitance_range (5.14468, 7.21608);
+      fall_capacitance : 7.21805;
+      fall_capacitance_range (5.10086, 7.21805);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (CKINVDCx14_ASAP7_75t_R) {
+area : 0.40824
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 737.28;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 8.38928;
+      rise_capacitance : 8.38544;
+      rise_capacitance_range (5.84556, 8.38544);
+      fall_capacitance : 8.38928;
+      fall_capacitance_range (5.80332, 8.38928);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (CKINVDCx16_ASAP7_75t_R) {
+area : 0.4374
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 737.28;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 9.54042;
+      rise_capacitance : 9.54042;
+      rise_capacitance_range (6.68098, 9.54042);
+      fall_capacitance : 9.53021;
+      fall_capacitance_range (6.64225, 9.53021);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (CKINVDCx20_ASAP7_75t_R) {
+area : 0.55404
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 737.28;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 11.9453;
+      rise_capacitance : 11.9453;
+      rise_capacitance_range (7.80705, 11.9453);
+      fall_capacitance : 11.9283;
+      fall_capacitance_range (7.75957, 11.9283);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (CKINVDCx5p33_ASAP7_75t_R) {
+area : 0.32076
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 184.32;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 3.70158;
+      rise_capacitance : 3.70008;
+      rise_capacitance_range (2.75878, 3.70008);
+      fall_capacitance : 3.70158;
+      fall_capacitance_range (2.75239, 3.70158);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (CKINVDCx6p67_ASAP7_75t_R) {
+area : 0.34992
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 368.64;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 4.5117;
+      rise_capacitance : 4.50993;
+      rise_capacitance_range (3.29852, 4.50993);
+      fall_capacitance : 4.5117;
+      fall_capacitance_range (3.3101, 4.5117);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (CKINVDCx8_ASAP7_75t_R) {
+area : 0.32076
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 368.64;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 4.88588;
+      rise_capacitance : 4.88588;
+      rise_capacitance_range (3.5401, 4.88588);
+      fall_capacitance : 4.88544;
+      fall_capacitance_range (3.55984, 4.88544);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (CKINVDCx9p33_ASAP7_75t_R) {
+area : 0.40824
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 368.64;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 6.17715;
+      rise_capacitance : 6.17715;
+      rise_capacitance_range (4.40014, 6.17715);
+      fall_capacitance : 6.17665;
+      fall_capacitance_range (4.37819, 6.17665);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (HB1xp67_ASAP7_75t_R) {
+area : 0.05832
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 23.04;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.316706;
+      rise_capacitance : 0.316706;
+      rise_capacitance_range (0.23793, 0.316706);
+      fall_capacitance : 0.316509;
+      fall_capacitance_range (0.23403, 0.316509);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (HB2xp67_ASAP7_75t_R) {
+area : 0.0729
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 23.04;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.476935;
+      rise_capacitance : 0.476935;
+      rise_capacitance_range (0.334195, 0.476935);
+      fall_capacitance : 0.476455;
+      fall_capacitance_range (0.331074, 0.476455);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (HB3xp67_ASAP7_75t_R) {
+area : 0.08748
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 23.04;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.601361;
+      rise_capacitance : 0.601361;
+      rise_capacitance_range (0.407175, 0.601361);
+      fall_capacitance : 0.599837;
+      fall_capacitance_range (0.397144, 0.599837);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (HB4xp67_ASAP7_75t_R) {
+area : 0.10206
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 23.04;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.721778;
+      rise_capacitance : 0.721778;
+      rise_capacitance_range (0.449637, 0.721778);
+      fall_capacitance : 0.719248;
+      fall_capacitance_range (0.440925, 0.719248);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (INVx11_ASAP7_75t_R) {
+area : 0.18954
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 368.64;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 6.33283;
+      rise_capacitance : 6.33283;
+      rise_capacitance_range (4.46506, 6.33283);
+      fall_capacitance : 6.32565;
+      fall_capacitance_range (4.48531, 6.32565);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (INVx13_ASAP7_75t_R) {
+area : 0.2187
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 737.28;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 7.46672;
+      rise_capacitance : 7.46672;
+      rise_capacitance_range (5.2147, 7.46672);
+      fall_capacitance : 7.46302;
+      fall_capacitance_range (5.17489, 7.46302);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (INVx1_ASAP7_75t_R) {
+area : 0.04374
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 46.08;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.619928;
+      rise_capacitance : 0.619928;
+      rise_capacitance_range (0.452829, 0.619928);
+      fall_capacitance : 0.619647;
+      fall_capacitance_range (0.453739, 0.619647);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (INVx2_ASAP7_75t_R) {
+area : 0.05832
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 92.16;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 1.19281;
+      rise_capacitance : 1.19281;
+      rise_capacitance_range (0.872112, 1.19281);
+      fall_capacitance : 1.19161;
+      fall_capacitance_range (0.869299, 1.19161);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (INVx3_ASAP7_75t_R) {
+area : 0.0729
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 92.16;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 1.76686;
+      rise_capacitance : 1.76574;
+      rise_capacitance_range (1.29339, 1.76574);
+      fall_capacitance : 1.76686;
+      fall_capacitance_range (1.29451, 1.76686);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (INVx4_ASAP7_75t_R) {
+area : 0.08748
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 184.32;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 2.33645;
+      rise_capacitance : 2.3361;
+      rise_capacitance_range (1.71346, 2.3361);
+      fall_capacitance : 2.33645;
+      fall_capacitance_range (1.71205, 2.33645);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (INVx5_ASAP7_75t_R) {
+area : 0.10206
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 184.32;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 2.90749;
+      rise_capacitance : 2.90695;
+      rise_capacitance_range (2.09768, 2.90695);
+      fall_capacitance : 2.90749;
+      fall_capacitance_range (2.12271, 2.90749);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (INVx6_ASAP7_75t_R) {
+area : 0.11664
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 368.64;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 3.48244;
+      rise_capacitance : 3.48244;
+      rise_capacitance_range (2.5182, 3.48244);
+      fall_capacitance : 3.48142;
+      fall_capacitance_range (2.53709, 3.48142);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (INVx8_ASAP7_75t_R) {
+area : 0.1458
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 368.64;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 4.61057;
+      rise_capacitance : 4.61057;
+      rise_capacitance_range (3.33515, 4.61057);
+      fall_capacitance : 4.60787;
+      fall_capacitance_range (3.32308, 4.60787);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (INVxp33_ASAP7_75t_R) {
+area : 0.04374
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 23.04;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.275723;
+      rise_capacitance : 0.275723;
+      rise_capacitance_range (0.209572, 0.275723);
+      fall_capacitance : 0.275491;
+      fall_capacitance_range (0.209772, 0.275491);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+  cell (INVxp67_ASAP7_75t_R) {
+area : 0.04374
+    pg_pin (VDD) {
+      direction : input;
+      pg_type : primary_power;
+      voltage_name : "VDD";
+    }
+    pg_pin (VSS) {
+      direction : input;
+      pg_type : primary_ground;
+      voltage_name : "VSS";
+    }
+    pin (Y) {
+      direction : output;
+      function : "!A";
+      power_down_function : "(!VDD) + (VSS)";
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_capacitance : 23.04;
+      output_voltage : default_VDD_VSS_output;
+    }
+    pin (A) {
+      driver_waveform_fall : "PreDriver20.5:fall";
+      driver_waveform_rise : "PreDriver20.5:rise";
+      direction : input;
+      related_ground_pin : VSS;
+      related_power_pin : VDD;
+      max_transition : 320;
+      capacitance : 0.443164;
+      rise_capacitance : 0.443164;
+      rise_capacitance_range (0.326401, 0.443164);
+      fall_capacitance : 0.442623;
+      fall_capacitance_range (0.327887, 0.442623);
+      input_voltage : default_VDD_VSS_input;
+    }
+  }
+}

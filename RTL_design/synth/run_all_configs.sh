@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# run_all_configs.sh — Sweep all 4 synthesis configurations
+# run_all_configs.sh — Sweep all 4 IO-Uncore synthesis configurations with Yosys + ASAP7
 # Run from RTL_design/ directory
 set -euo pipefail
 
-DC_SHELL=${DC_SHELL:-/usr/local/syn/Y-2026.03/bin/dc_shell}
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 RTL_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
-
 cd "$RTL_DIR"
 
-echo "=== IO-Uncore Synthesis Sweep ==="
-echo "DC: $DC_SHELL"
+echo "=== IO-Uncore Yosys Synthesis Sweep ==="
 echo "Working dir: $RTL_DIR"
 echo ""
 
@@ -25,11 +22,11 @@ CONFIGS=(
 for cfg in "${CONFIGS[@]}"; do
     read -r NQ QD <<< "$cfg"
     echo "--- Synthesizing NQ=$NQ QD=$QD ---"
-    $DC_SHELL -f synth/run_synth.tcl -x "set NQ $NQ; set QD $QD" \
-        2>&1 | tee reports/dc_log_${NQ}_${QD}.log
+    NQ=$NQ QD=$QD yosys -c synth/run_synth_yosys.tcl \
+        2>&1 | tee reports/yosys_log_${NQ}_${QD}.log | tail -5
     echo ""
 done
 
 echo "=== All configurations synthesized ==="
-echo "Reports in: reports/"
-ls -la reports/*.rpt 2>/dev/null || echo "(no reports yet — check for errors)"
+echo "Reports:"
+ls -la reports/stat_*.rpt 2>/dev/null || echo "(no reports — check for errors)"

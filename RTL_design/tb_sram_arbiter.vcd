@@ -1,0 +1,305 @@
+$date
+	Mon Apr 13 22:31:36 2026
+$end
+$version
+	Icarus Verilog
+$end
+$timescale
+	1ps
+$end
+$scope module tb_sram_arbiter $end
+$var wire 128 ! req2_rdata [127:0] $end
+$var wire 1 " req2_grant $end
+$var wire 128 # req1_rdata [127:0] $end
+$var wire 1 $ req1_grant $end
+$var wire 128 % req0_rdata [127:0] $end
+$var wire 1 & req0_grant $end
+$var reg 1 ' clk $end
+$var reg 8 ( req0_addr [7:0] $end
+$var reg 1 ) req0_valid $end
+$var reg 128 * req0_wdata [127:0] $end
+$var reg 1 + req0_wr $end
+$var reg 8 , req1_addr [7:0] $end
+$var reg 1 - req1_valid $end
+$var reg 128 . req1_wdata [127:0] $end
+$var reg 1 / req1_wr $end
+$var reg 8 0 req2_addr [7:0] $end
+$var reg 1 1 req2_valid $end
+$var reg 128 2 req2_wdata [127:0] $end
+$var reg 1 3 req2_wr $end
+$var reg 1 4 rst_n $end
+$var integer 32 5 errors [31:0] $end
+$scope module dut $end
+$var wire 1 ' clk $end
+$var wire 8 6 req0_addr [7:0] $end
+$var wire 128 7 req0_rdata [127:0] $end
+$var wire 1 ) req0_valid $end
+$var wire 128 8 req0_wdata [127:0] $end
+$var wire 1 + req0_wr $end
+$var wire 8 9 req1_addr [7:0] $end
+$var wire 128 : req1_rdata [127:0] $end
+$var wire 1 - req1_valid $end
+$var wire 128 ; req1_wdata [127:0] $end
+$var wire 1 / req1_wr $end
+$var wire 8 < req2_addr [7:0] $end
+$var wire 128 = req2_rdata [127:0] $end
+$var wire 1 1 req2_valid $end
+$var wire 128 > req2_wdata [127:0] $end
+$var wire 1 3 req2_wr $end
+$var wire 1 4 rst_n $end
+$var reg 2 ? last_grant [1:0] $end
+$var reg 128 @ rdata_reg [127:0] $end
+$var reg 1 & req0_grant $end
+$var reg 1 $ req1_grant $end
+$var reg 1 " req2_grant $end
+$var reg 8 A sel_addr [7:0] $end
+$var reg 2 B sel_id [1:0] $end
+$var reg 1 C sel_valid $end
+$var reg 128 D sel_wdata [127:0] $end
+$var reg 1 E sel_wr $end
+$upscope $end
+$scope task reset_inputs $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+0E
+b0 D
+0C
+b0 B
+b0 A
+b0 @
+b10 ?
+b0 >
+b0 =
+b0 <
+b0 ;
+b0 :
+b0 9
+b0 8
+b0 7
+b0 6
+b0 5
+04
+03
+b0 2
+01
+b0 0
+0/
+b0 .
+0-
+b0 ,
+0+
+b0 *
+0)
+b0 (
+0'
+0&
+b0 %
+0$
+b0 #
+0"
+b0 !
+$end
+#5000
+1'
+#10000
+0'
+#15000
+14
+1'
+#20000
+0'
+#25000
+1'
+#30000
+1&
+b11011110101011011011111011101111 D
+b1010 A
+1E
+1C
+b11011110101011011011111011101111 *
+b11011110101011011011111011101111 8
+b1010 (
+b1010 6
+1+
+1)
+0'
+#35000
+b0 ?
+0&
+b0 D
+b0 A
+0E
+0C
+b0 *
+b0 8
+b0 (
+b0 6
+0+
+0)
+1'
+#40000
+1&
+b1010 A
+1C
+b1010 (
+b1010 6
+1)
+0'
+#45000
+b11011110101011011011111011101111 !
+b11011110101011011011111011101111 =
+b11011110101011011011111011101111 #
+b11011110101011011011111011101111 :
+b11011110101011011011111011101111 %
+b11011110101011011011111011101111 7
+b11011110101011011011111011101111 @
+0&
+b0 A
+0C
+b0 (
+b0 6
+0)
+1'
+#50000
+0'
+#55000
+1'
+#60000
+1$
+b1011101110111011 D
+b11110 A
+1E
+b1 B
+1C
+b1011101110111011 .
+b1011101110111011 ;
+b11110 ,
+b11110 9
+1/
+1-
+b1010101010101010 *
+b1010101010101010 8
+b10100 (
+b10100 6
+1+
+1)
+0'
+#65000
+b1 ?
+1&
+0$
+b0 B
+b1010101010101010 D
+b10100 A
+1E
+1C
+0-
+1'
+#70000
+0'
+#75000
+b0 ?
+0&
+b0 D
+b0 A
+0E
+0C
+b0 .
+b0 ;
+b0 ,
+b0 9
+0/
+b0 *
+b0 8
+b0 (
+b0 6
+0+
+0)
+1'
+#80000
+0'
+#85000
+1'
+#90000
+1$
+b10001000100010 D
+b110010 A
+1E
+b1 B
+1C
+b11001100110011 2
+b11001100110011 >
+b111100 0
+b111100 <
+13
+11
+b10001000100010 .
+b10001000100010 ;
+b110010 ,
+b110010 9
+1/
+1-
+b1000100010001 *
+b1000100010001 8
+b101000 (
+b101000 6
+1+
+1)
+0'
+#95000
+b1 ?
+1"
+0$
+b10 B
+b11001100110011 D
+b111100 A
+1E
+1C
+0-
+1'
+#100000
+0'
+#105000
+b10 ?
+1&
+0"
+b0 B
+b1000100010001 D
+b101000 A
+1E
+1C
+01
+1'
+#110000
+0'
+#115000
+b0 ?
+0&
+b0 D
+b0 A
+0E
+0C
+b0 2
+b0 >
+b0 0
+b0 <
+03
+b0 .
+b0 ;
+b0 ,
+b0 9
+0/
+b0 *
+b0 8
+b0 (
+b0 6
+0+
+0)
+1'
+#120000
+0'
+#125000
+1'

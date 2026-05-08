@@ -56,7 +56,7 @@ module db_coalescer #(
 
     // Timer tick: decrement all active timers every cycle
     // (done outside FSM for parallel operation)
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             for (i = 0; i < NUM_QUEUES; i = i + 1) begin
                 timer[i] <= 0;
@@ -80,7 +80,7 @@ module db_coalescer #(
     end
 
     // Main FSM
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             state <= S_IDLE;
             cur_qid <= 0;

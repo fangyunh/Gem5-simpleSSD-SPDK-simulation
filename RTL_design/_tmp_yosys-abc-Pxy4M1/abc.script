@@ -1,0 +1,33 @@
+echo + read_blif "_tmp_yosys-abc-Pxy4M1/input.blif";
+read_blif "_tmp_yosys-abc-Pxy4M1/input.blif";
+echo + read_lib   -w "/home/fangy6/SimpleSSD_Gem5_simulation/RTL_design/lib/asap7sc7p5t_SIMPLE_RVT_TT_trimmed.lib" ;
+read_lib   -w "/home/fangy6/SimpleSSD_Gem5_simulation/RTL_design/lib/asap7sc7p5t_SIMPLE_RVT_TT_trimmed.lib" ;
+echo + strash;
+strash;
+echo + &get -n;
+&get -n;
+echo + &fraig -x;
+&fraig -x;
+echo + &put;
+&put;
+echo + scorr;
+scorr;
+echo + dc2;
+dc2;
+echo + dretime;
+dretime;
+echo + strash;
+strash;
+echo + &get -n;
+&get -n;
+echo + &dch -f;
+&dch -f;
+echo + &nf ;
+&nf ;
+echo + &put;
+&put;
+echo + write_blif _tmp_yosys-abc-Pxy4M1/output.blif;
+write_blif _tmp_yosys-abc-Pxy4M1/output.blif;
+echo;
+echo "YOSYS_ABC_DONE"
+

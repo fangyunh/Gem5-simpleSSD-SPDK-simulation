@@ -12,7 +12,8 @@ module io_uncore_top #(
     parameter COALESCE_T     = 100,
     parameter SRAM_ADDR_WIDTH = 20,
     parameter SRAM_DEPTH     = 1048576,
-    parameter DATA_WIDTH     = 128
+    parameter DATA_WIDTH     = 512,
+    parameter CQE_WIDTH      = 128   // NVMe CQE = 16B
 ) (
     input  wire clk,
     input  wire rst_n,
@@ -30,7 +31,7 @@ module io_uncore_top #(
 
     // CQE input from NVMe backend
     input  wire                          cqe_valid,
-    input  wire [DATA_WIDTH-1:0]         cqe_data,
+    input  wire [CQE_WIDTH-1:0]          cqe_data,
     input  wire [$clog2(NUM_QUEUES)-1:0] cqe_qid,
 
     // Backend notification (SQE ready)
@@ -46,7 +47,7 @@ module io_uncore_top #(
     // DMA write to host (from CQ flush)
     output wire                          dma_wr_req,
     output wire [63:0]                   dma_wr_addr,
-    output wire [DATA_WIDTH-1:0]         dma_wr_data,
+    output wire [CQE_WIDTH-1:0]          dma_wr_data,
 
     // Stat read interface
     input  wire [3:0]  stat_rd_addr,
@@ -147,7 +148,8 @@ module io_uncore_top #(
     cq_engine #(
         .NUM_QUEUES(NUM_QUEUES), .QUEUE_DEPTH(QUEUE_DEPTH),
         .BATCH_N(BATCH_N), .BATCH_T(BATCH_T),
-        .SRAM_ADDR_WIDTH(SRAM_ADDR_WIDTH), .DATA_WIDTH(DATA_WIDTH)
+        .SRAM_ADDR_WIDTH(SRAM_ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH), .CQE_WIDTH(CQE_WIDTH)
     ) u_cq_engine (
         .clk(clk), .rst_n(rst_n),
         .cqe_valid(cqe_valid), .cqe_data(cqe_data), .cqe_qid(cqe_qid),

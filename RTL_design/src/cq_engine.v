@@ -8,14 +8,15 @@ module cq_engine #(
     parameter BATCH_N     = 8,
     parameter BATCH_T     = 1000,  // timeout in cycles
     parameter SRAM_ADDR_WIDTH = 20,
-    parameter DATA_WIDTH  = 128
+    parameter DATA_WIDTH  = 512,
+    parameter CQE_WIDTH   = 128   // NVMe CQE = 16 bytes
 ) (
     input  wire clk,
     input  wire rst_n,
 
     // CQE input from NVMe backend
     input  wire                          cqe_valid,
-    input  wire [DATA_WIDTH-1:0]         cqe_data,   // 16B CQE (128 bits)
+    input  wire [CQE_WIDTH-1:0]          cqe_data,   // 16B CQE (128 bits)
     input  wire [$clog2(NUM_QUEUES)-1:0] cqe_qid,
 
     // SRAM interface (to arbiter)
@@ -35,7 +36,7 @@ module cq_engine #(
     // DMA write interface (to host DRAM)
     output reg                           dma_wr_req,
     output reg  [63:0]                   dma_wr_addr,
-    output reg  [DATA_WIDTH-1:0]         dma_wr_data,
+    output reg  [CQE_WIDTH-1:0]          dma_wr_data,
 
     // Stats
     output wire                          stat_cqe_enqueued,
@@ -47,9 +48,8 @@ module cq_engine #(
     localparam BW = $clog2(BATCH_N + 1);
     localparam TW = $clog2(BATCH_T + 1);
 
-    // CQ SRAM base address (after SQ region: NQ * QD * 4 words of 128b each)
-    // For simplicity, CQ base = NUM_QUEUES * QUEUE_DEPTH (each SQE = 4 x 128b words)
-    localparam CQ_SRAM_BASE = NUM_QUEUES * QUEUE_DEPTH * 4;
+    // CQ SRAM base address (after SQ region: NQ * QD words at 512b each)
+    localparam CQ_SRAM_BASE = NUM_QUEUES * QUEUE_DEPTH;
 
     // Per-queue state
     reg [DW-1:0]  cq_tail     [0:NUM_QUEUES-1];
@@ -66,7 +66,7 @@ module cq_engine #(
 
     reg [2:0] state;
     reg [QW-1:0] cur_qid;
-    reg [DATA_WIDTH-1:0] cur_cqe;
+    reg [CQE_WIDTH-1:0] cur_cqe;
     reg [BW-1:0] flush_count;
     reg [DW-1:0] flush_idx;
 
@@ -87,7 +87,7 @@ module cq_engine #(
     integer i;
 
     // Timer tick (parallel, outside FSM)
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             for (i = 0; i < NUM_QUEUES; i = i + 1) begin
                 timer[i] <= 0;
@@ -110,7 +110,7 @@ module cq_engine #(
     end
 
     // Main FSM
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             state <= C_IDLE;
             cur_qid <= 0;
@@ -139,12 +139,12 @@ module cq_engine #(
                     if (cqe_valid) begin
                         cur_qid <= cqe_qid;
                         cur_cqe <= cqe_data;
-                        // Request SRAM write
+                        // Request SRAM write (CQE zero-padded to 512b)
                         sram_req <= 1;
                         sram_wr  <= 1;
                         sram_addr <= CQ_SRAM_BASE[SRAM_ADDR_WIDTH-1:0]
                                      + {{(SRAM_ADDR_WIDTH-QW-DW){1'b0}}, cqe_qid, cq_tail[cqe_qid]};
-                        sram_wdata <= cqe_data;
+                        sram_wdata <= {{(DATA_WIDTH-CQE_WIDTH){1'b0}}, cqe_data};
                         state <= C_ENQUEUE;
                     end else begin
                         // Check for timer expiry
@@ -192,7 +192,7 @@ module cq_engine #(
                                      + {{(SRAM_ADDR_WIDTH-QW-DW){1'b0}}, cur_qid, flush_idx};
                         if (sram_grant) begin
                             dma_wr_req  <= 1;
-                            dma_wr_data <= sram_rdata;
+                            dma_wr_data <= sram_rdata[CQE_WIDTH-1:0]; // low 128b is the CQE
                             dma_wr_addr <= {48'd0, cur_qid, flush_idx, 4'b0000}; // simplified addr
                             flush_idx <= flush_idx + 1'b1;
                         end

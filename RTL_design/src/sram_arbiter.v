@@ -1,11 +1,11 @@
 // sram_arbiter.v — Round-robin arbiter for shared SRAM access
-// 3 requestors, 128-bit data bus, 1-cycle grant latency.
+// 3 requestors, 512-bit data bus, 1-cycle grant latency.
 // SRAM modeled as a register array (replaced by macro in synthesis).
 
 module sram_arbiter #(
     parameter NUM_REQUESTORS = 3,
     parameter SRAM_ADDR_WIDTH = 20,
-    parameter DATA_WIDTH = 128,
+    parameter DATA_WIDTH = 512,
     parameter SRAM_DEPTH = 1048576  // default 1M entries, overridden by top
 ) (
     input  wire clk,

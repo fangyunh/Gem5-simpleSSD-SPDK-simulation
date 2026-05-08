@@ -20,22 +20,20 @@ module stat_counters #(
 
     reg [63:0] counters [0:NUM_COUNTERS-1];
 
-    integer i;
-
     // Read: combinational mux
     assign stat_rd_data = (stat_rd_addr < NUM_COUNTERS) ?
                           counters[stat_rd_addr] : 64'd0;
 
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n || stat_reset) begin
-            for (i = 0; i < NUM_COUNTERS; i = i + 1)
-                counters[i] <= 64'd0;
-        end else begin
-            for (i = 0; i < NUM_COUNTERS; i = i + 1) begin
-                if (stat_inc[i] && counters[i] != {64{1'b1}})
-                    counters[i] <= counters[i] + 64'd1;
+    genvar gi;
+    generate
+        for (gi = 0; gi < NUM_COUNTERS; gi = gi + 1) begin : gen_counters
+            always @(posedge clk) begin
+                if (!rst_n || stat_reset)
+                    counters[gi] <= 64'd0;
+                else if (stat_inc[gi] && counters[gi] != {64{1'b1}})
+                    counters[gi] <= counters[gi] + 64'd1;
             end
         end
-    end
+    endgenerate
 
 endmodule

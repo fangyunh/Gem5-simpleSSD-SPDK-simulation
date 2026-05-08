@@ -1,0 +1,1 @@
+dfflegalize -cell $_DFF_P_ 01 -cell $_DFF_N_ 01 -cell $_DFFSR_PNN_ 01

@@ -1,0 +1,62 @@
+[
+  {
+    "sq_kb": 64.0,
+    "cq_kb": 16.0,
+    "prp_kb": 248.0,
+    "meta_kb": 1.0,
+    "total_kb": 329.0,
+    "no_prp_kb": 81.0,
+    "total_bits": 2695168,
+    "area_mm2": 0.1092,
+    "area_no_prp_mm2": 0.0269,
+    "name": "A",
+    "label": "16QP/QD64",
+    "nq": 16,
+    "qd": 64
+  },
+  {
+    "sq_kb": 256.0,
+    "cq_kb": 64.0,
+    "prp_kb": 992.0,
+    "meta_kb": 4.0,
+    "total_kb": 1316.0,
+    "no_prp_kb": 324.0,
+    "total_bits": 10780672,
+    "area_mm2": 0.4366,
+    "area_no_prp_mm2": 0.1075,
+    "name": "B",
+    "label": "64QP/QD64",
+    "nq": 64,
+    "qd": 64
+  },
+  {
+    "sq_kb": 128.0,
+    "cq_kb": 32.0,
+    "prp_kb": 496.0,
+    "meta_kb": 1.0,
+    "total_kb": 657.0,
+    "no_prp_kb": 161.0,
+    "total_bits": 5382144,
+    "area_mm2": 0.218,
+    "area_no_prp_mm2": 0.0534,
+    "name": "C",
+    "label": "16QP/QD128",
+    "nq": 16,
+    "qd": 128
+  },
+  {
+    "sq_kb": 512.0,
+    "cq_kb": 128.0,
+    "prp_kb": 1984.0,
+    "meta_kb": 4.0,
+    "total_kb": 2628.0,
+    "no_prp_kb": 644.0,
+    "total_bits": 21528576,
+    "area_mm2": 0.8719,
+    "area_no_prp_mm2": 0.2137,
+    "name": "D",
+    "label": "64QP/QD128",
+    "nq": 64,
+    "qd": 128
+  }
+]

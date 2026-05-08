@@ -1,0 +1,29 @@
+
+27. Printing statistics.
+
+=== io_uncore_top ===
+
+        +----------Local Count, excluding submodules.
+        | 
+    92526 wires
+    94136 wire bits
+       26 public wires
+     1636 public wire bits
+       23 ports
+      592 port bits
+    93109 cells
+      138   DFFASRHQNx1_ASAP7_75t_R
+    15841   DFFHQNx1_ASAP7_75t_R
+      206   MAJIxp5_ASAP7_75t_R
+       55   MAJx3_ASAP7_75t_R
+    66943   NAND2xp33_ASAP7_75t_R
+     7282   NAND3xp33_ASAP7_75t_R
+     1204   NAND4xp25_ASAP7_75t_R
+      825   NAND5xp2_ASAP7_75t_R
+       39   NOR2xp33_ASAP7_75t_R
+        8   OR2x4_ASAP7_75t_R
+        5   OR3x1_ASAP7_75t_R
+       48   XNOR2x2_ASAP7_75t_R
+      514   XOR2x2_ASAP7_75t_R
+        1   sram_macro
+

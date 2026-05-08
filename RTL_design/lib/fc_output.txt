@@ -1,0 +1,35 @@
+ 
+                              Fusion Compiler (TM)
+
+        Version X-2025.06-SP1-707-T-20251209 for linux64 - Dec 09, 2025
+                            Base build date 7/7/2025
+
+                    Copyright (c) 1988 - 2025 Synopsys, Inc.
+   This software and the associated documentation are proprietary to Synopsys,
+      Inc.  This software may only be used in accordance with the terms and
+  conditions of a written license agreement with Synopsys, Inc.  All other use,
+   reproduction, or distribution of this software is strictly prohibited.  By
+   installing, accessing, using, or executing this software, you agree that it
+  will reside on, operate within, and have access to the computers and networks
+    where such software is used ("Host System"), and that Synopsys may access
+     components and data of the Host System as necessary for it to function
+ properly, to authenticate and validate license keys, to verify that it is used
+ only in conformity with the applicable license restrictions, and to communicate
+                 error messages and associated data to Synopsys.
+
+
+Information: Term was not able to be set up using xterm-256color . Using "xterm" by default instead. (CLE-10)
+Error: Message for 'CLE-100' not found
+fc_shell> set_app_var search_path [list /home/fangy6/SimpleSSD_Gem5_simulation/RTL_design/lib /home/xier2/2024-12-08-simulator_modify/20250922_new_paper/rtl2/asap7/asap7sc7p5t_28/techlef_misc /home/xier2/2024-12-08-simulator_modify/20250922_new_paper/rtl2/asap7/asap7sc7p5t_28/LEF]
+/home/fangy6/SimpleSSD_Gem5_simulation/RTL_design/lib /home/xier2/2024-12-08-simulator_modify/20250922_new_paper/rtl2/asap7/asap7sc7p5t_28/techlef_misc /home/xier2/2024-12-08-simulator_modify/20250922_new_paper/rtl2/asap7/asap7sc7p5t_28/LEF
+fc_shell> create_lib -technology asap7_tech_1x_201209.lef -ref_libs {asap7sc7p5t_28_R_1x_220121a.lef} asap7_ref.ndm
+Error: Cannot load technology file '/home/xier2/2024-12-08-simulator_modify/20250922_new_paper/rtl2/asap7/asap7sc7p5t_28/techlef_misc/asap7_tech_1x_201209.lef'. (LIB-007)
+Error: problem in create_lib
+        Use error_info for more info. (CMD-013)
+fc_shell> exit
+Maximum memory usage for this session: 387.45 MB
+Maximum memory usage for this session including child processes: 387.45 MB
+CPU usage for this session:      9 seconds (  0.00 hours)
+Elapsed time for this session:     10 seconds (  0.00 hours)
+Thank you for using Fusion Compiler.
+
