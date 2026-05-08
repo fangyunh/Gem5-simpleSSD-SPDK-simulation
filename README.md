@@ -57,15 +57,9 @@ mkdir -p assets
 # Guest kernel (~24 MB) — gem5 stock kernel
 wget -O assets/vmlinux-5.4.49 \
   http://dist.gem5.org/dist/v21-2/kernels/x86/static/vmlinux-5.4.49
-
-# Guest disk image (Ubuntu 18.04 LTS, ~16 GB raw) — gem5-resources
-wget -O assets/x86-ubuntu.img.gz \
-  "https://resources.gem5.org/resources/x86-ubuntu-18.04-img?database=gem5-resources&version=1.0.0"
-gunzip assets/x86-ubuntu.img.gz   # if the download is gzipped
 ```
-
-> Already have these on another machine? Use `upload_large_files.sh` to rsync
-> them onto a fresh remote (`assets/` + `docker_artifacts/` top-up).
+Guest disk image (Ubuntu 18.04 LTS, ~16 GB raw) — gem5-resources
+Access the "https://resources.gem5.org/resources/x86-ubuntu-18.04-img?database=gem5-resources&version=1.0.0" to download the image and placed under assets/ folder.
 
 #### About the kernel `.config`
 
