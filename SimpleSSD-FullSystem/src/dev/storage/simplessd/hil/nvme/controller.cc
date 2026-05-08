@@ -32,6 +32,10 @@
 
 #define BOOLEAN_STRING(b) ((b) ? "true" : "false")
 
+// BAR0 byte offset of the Mode B I/O Uncore readiness hint register.
+// The NVMe doorbell region is at 0x1000+; 0x2000 is past any doorbell entry.
+#define UNCORE_HINT_REG_OFFSET  0x2000
+
 namespace SimpleSSD {
 
 namespace HIL {
@@ -117,6 +121,24 @@ Controller::Controller(Interface *intrface, ConfigReader &c)
   maxRequest = conf.readUint(CONFIG_NVME, NVME_MAX_REQUEST_COUNT);
   workInterval = conf.readUint(CONFIG_NVME, NVME_WORK_INTERVAL);
   requestInterval = workInterval / maxRequest;
+
+  // --- I/O Uncore initialization ---
+  uncoreCfg.mode     = (UncoreMode)conf.readUint(CONFIG_NVME, NVME_UNCORE_MODE);
+  uncoreCfg.cqBatchN = (uint32_t)conf.readUint(CONFIG_NVME, NVME_UNCORE_CQ_BATCH_N);
+  uncoreCfg.cqBatchT = conf.readUint(CONFIG_NVME, NVME_UNCORE_CQ_BATCH_T);
+  uncoreCfg.dbBatchB = (uint32_t)conf.readUint(CONFIG_NVME, NVME_UNCORE_DB_BATCH_B);
+
+  uncoreHintReady      = 0;
+  uncoreFlushScheduled = false;
+  uncorePendingCQE.clear();
+  uncoreDbAccumPerQ.assign(sqsize, 0);
+
+  uncoreFlushEvent = allocate([this](uint64_t) { uncoreFlushCQBuffer(false); });
+
+  debugprint(LOG_HIL_NVME,
+             "UNCORE  | mode=%u cqBatchN=%u cqBatchT=%" PRIu64 " dbBatchB=%u",
+             (uint32_t)uncoreCfg.mode, uncoreCfg.cqBatchN,
+             uncoreCfg.cqBatchT, uncoreCfg.dbBatchB);
 
   // Which subsystem should we use
   uint16_t vid, ssvid;
@@ -1393,6 +1415,32 @@ bool Controller::getCoalescing(uint16_t iv) {
 }
 
 void Controller::collectSQueue(DMAFunction &func, void *context) {
+  // --- I/O Uncore: Gate 1 — SQ collection threshold guard ---
+  // When uncore is enabled, defer collection if not enough SQEs are visible.
+  // Admin queue (sqID==0) always bypasses the threshold and forces collection.
+  if (uncoreCfg.mode != UNCORE_MODE_DISABLED) {
+    bool adminHasWork = (ppSQueue[0] != nullptr &&
+                         ppSQueue[0]->getItemCount() > 0);
+
+    uint32_t totalIOVisible = 0;
+    for (uint16_t i = 1; i < sqsize; i++) {
+      if (ppSQueue[i]) {
+        totalIOVisible += ppSQueue[i]->getItemCount();
+      }
+    }
+    uncoreStats.sqesVisible += totalIOVisible;
+
+    if (!adminHasWork && totalIOVisible < uncoreCfg.dbBatchB) {
+      // Threshold not met: signal completion to the caller without doing
+      // any DMA.  The work() event will fire again at the next workInterval.
+      uncoreStats.collectDeferred++;
+      func(getTick(), context);
+      return;
+    }
+    uncoreStats.collectAllowed++;
+  }
+  // --- End Gate 1 ---
+
   static uint16_t wrrHigh = conf.readUint(CONFIG_NVME, NVME_WRR_HIGH);
   static uint16_t wrrMedium = conf.readUint(CONFIG_NVME, NVME_WRR_MEDIUM);
   DMAContext *pContext = new DMAContext(func, context);
@@ -1583,6 +1631,12 @@ void Controller::work() {
 
       shutdownReserved = false;
 
+      // I/O Uncore: force-drain any staged CQEs before clearing the SQ FIFO.
+      // Without this, SPDK would never see completions for in-flight I/Os.
+      if (!uncorePendingCQE.empty()) {
+        uncoreFlushCQBuffer(true);
+      }
+
       lSQFIFO.clear();
     }
 
@@ -1688,6 +1742,34 @@ void Controller::submit(CQEntryWrapper &entry) {
   // Set submit time
   entry.submitAt = getTick();
 
+  // --- I/O Uncore: Gate 2 — CQE staging buffer ---
+  // Non-admin I/O CQEs (cqID != 0) are redirected to the staging buffer when
+  // uncore is enabled.  Admin CQEs always fall through to the immediate path.
+  if (uncoreCfg.mode != UNCORE_MODE_DISABLED && entry.cqID != 0) {
+    uncorePendingCQE.emplace_back(entry, entry.submitAt);
+    uncoreStats.cqesGenerated++;
+
+    if ((uint32_t)uncorePendingCQE.size() >= uncoreCfg.cqBatchN) {
+      // Count threshold reached: flush immediately.
+      uncoreFlushCQBuffer(false);
+    }
+    else if (!uncoreFlushScheduled) {
+      // Arm the timeout flush for the first entry in this batch.
+      // Use getTick() (current sim time) — NOT entry.submitAt which is the
+      // original SQ submission time and is always in the past by the time
+      // the SSD completes the I/O and calls submit().
+      uncoreFlushScheduled = true;
+      schedule(uncoreFlushEvent, getTick() + uncoreCfg.cqBatchT);
+    }
+    return;  // Do NOT fall through to the lCQFIFO path.
+  }
+  else if (uncoreCfg.mode != UNCORE_MODE_DISABLED) {
+    // Admin CQE (cqID==0): bypass staging but count it.
+    uncoreStats.cqesAdminBypassed++;
+  }
+  // --- End Gate 2 ---
+  // Fall through to the original lCQFIFO path for: admin CQEs and disabled mode.
+
   // Enqueue with delay
   auto iter = lCQFIFO.begin();
 
@@ -1724,6 +1806,12 @@ void Controller::reserveCompletion() {
   }
 
   if (valid) {
+    // Clamp to current tick: when uncore batching delays CQE delivery,
+    // submitAt / nextTime may already be in the past.
+    uint64_t now = getTick();
+    if (tick < now) {
+      tick = now;
+    }
     schedule(completionEvent, tick);
   }
 }
@@ -1757,6 +1845,10 @@ void Controller::completion() {
             updateInterrupt(*iter, true);
           }
         }
+
+        // Update Mode B hint: reflect what is still pending in lCQFIFO
+        // after this drain cycle (staged entries already moved by flush).
+        uncoreHintReady = (uint32_t)lCQFIFO.size();
 
         reserveCompletion();
 
@@ -1844,15 +1936,105 @@ void Controller::completion() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// I/O Uncore: Gate 3 — CQE flush function
+// ---------------------------------------------------------------------------
+
+void Controller::uncoreFlushCQBuffer(bool isShutdown) {
+  if (uncorePendingCQE.empty()) {
+    // Nothing to flush; cancel the timeout if it was pending.
+    if (uncoreFlushScheduled) {
+      deschedule(uncoreFlushEvent);
+      uncoreFlushScheduled = false;
+    }
+    return;
+  }
+
+  uint64_t depth = (uint64_t)uncorePendingCQE.size();
+
+  // Record flush depth in histogram (bucket capped at 63).
+  uncoreStats.flushDepthHist[(depth < 64) ? depth : 63]++;
+
+  // Classify trigger type.
+  if (isShutdown) {
+    uncoreStats.flushByShutdown++;
+  }
+  else if (depth >= (uint64_t)uncoreCfg.cqBatchN) {
+    uncoreStats.flushByCount++;
+  }
+  else {
+    uncoreStats.flushByTimeout++;
+  }
+
+  // Move staged CQEs into lCQFIFO preserving submitAt sort order.
+  for (auto &pe : uncorePendingCQE) {
+    CQEntryWrapper &entry = pe.wrapper;
+    auto iter = lCQFIFO.begin();
+    for (; iter != lCQFIFO.end(); ++iter) {
+      if (iter->submitAt > entry.submitAt) {
+        break;
+      }
+    }
+    lCQFIFO.insert(iter, entry);
+    uncoreStats.cqesPublished++;
+  }
+  uncorePendingCQE.clear();
+
+  // Cancel the timeout event if it was previously armed.
+  if (uncoreFlushScheduled) {
+    deschedule(uncoreFlushEvent);
+    uncoreFlushScheduled = false;
+  }
+
+  // Update Mode B hint to reflect new lCQFIFO depth.
+  uncoreHintReady = (uint32_t)lCQFIFO.size();
+
+  // Hand off to the existing DMA-write + interrupt pipeline.
+  reserveCompletion();
+}
+
+// ---------------------------------------------------------------------------
+
 void Controller::getStatList(std::vector<Stats> &list, std::string prefix) {
+  if (uncoreCfg.mode != UNCORE_MODE_DISABLED) {
+    std::string p = prefix + "uncore.";
+    list.push_back({p + "sqes_visible",        "SQEs visible to Gate 1 over all work cycles"});
+    list.push_back({p + "collect_deferred",    "Gate 1 deferrals (not enough SQEs)"});
+    list.push_back({p + "collect_allowed",     "Gate 1 pass-throughs"});
+    list.push_back({p + "cqes_generated",      "I/O CQEs entering staging buffer"});
+    list.push_back({p + "cqes_admin_bypassed", "Admin CQEs bypassing staging"});
+    list.push_back({p + "cqes_published",      "CQEs written to host CQ via flush"});
+    list.push_back({p + "flush_by_count",      "Flushes triggered by count threshold N"});
+    list.push_back({p + "flush_by_timeout",    "Flushes triggered by timeout T"});
+    list.push_back({p + "flush_by_shutdown",   "Force-drain flushes on shutdown"});
+    for (int i = 0; i < 64; i++) {
+      list.push_back({p + "flush_depth_hist_" + std::to_string(i),
+                      "Flush depth histogram bucket " + std::to_string(i)});
+    }
+  }
   pSubsystem->getStatList(list, prefix);
 }
 
 void Controller::getStatValues(std::vector<double> &values) {
+  if (uncoreCfg.mode != UNCORE_MODE_DISABLED) {
+    values.push_back((double)uncoreStats.sqesVisible);
+    values.push_back((double)uncoreStats.collectDeferred);
+    values.push_back((double)uncoreStats.collectAllowed);
+    values.push_back((double)uncoreStats.cqesGenerated);
+    values.push_back((double)uncoreStats.cqesAdminBypassed);
+    values.push_back((double)uncoreStats.cqesPublished);
+    values.push_back((double)uncoreStats.flushByCount);
+    values.push_back((double)uncoreStats.flushByTimeout);
+    values.push_back((double)uncoreStats.flushByShutdown);
+    for (int i = 0; i < 64; i++) {
+      values.push_back((double)uncoreStats.flushDepthHist[i]);
+    }
+  }
   pSubsystem->getStatValues(values);
 }
 
 void Controller::resetStatValues() {
+  uncoreStats = UncoreStats{};
   pSubsystem->resetStatValues();
 }
 

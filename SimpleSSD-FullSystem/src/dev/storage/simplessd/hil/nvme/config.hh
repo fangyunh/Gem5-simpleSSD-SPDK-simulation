@@ -50,7 +50,12 @@ typedef enum {
   NVME_ENABLE_DISK_IMAGE,
   NVME_STRICT_DISK_SIZE,
   NVME_DISK_IMAGE_PATH,
-  NVME_USE_COW_DISK
+  NVME_USE_COW_DISK,
+  // --- I/O Uncore knobs ---
+  NVME_UNCORE_MODE,        //!< UncoreMode: 0=disabled, 1=Mode A, 2=Mode B
+  NVME_UNCORE_CQ_BATCH_N,  //!< CQBatchN: flush staging buffer after N CQEs
+  NVME_UNCORE_CQ_BATCH_T,  //!< CQBatchT: flush timeout in picoseconds
+  NVME_UNCORE_DB_BATCH_B   //!< DBBatchB: min SQEs visible before SQ collection
 } NVME_CONFIG;
 
 class Config : public BaseConfig {
@@ -72,6 +77,11 @@ class Config : public BaseConfig {
   bool strictDiskSize;           //!< Default: False
   bool useCopyOnWriteDisk;       //!< Default: False
   std::unordered_map<uint16_t, std::string> diskImagePaths;  //!< Default: ""
+  // --- I/O Uncore knobs ---
+  uint32_t uncoreMode;       //!< Default: 0 (disabled)
+  uint32_t uncoreCQBatchN;   //!< Default: 8
+  uint64_t uncoreCQBatchT;   //!< Default: 4000000 ps (= 4 µs)
+  uint32_t uncoreDBBatchB;   //!< Default: 4
 
  public:
   Config();

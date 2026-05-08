@@ -45,6 +45,11 @@ const char NAME_ENABLE_DISK_IMAGE[] = "EnableDiskImage";
 const char NAME_STRICT_DISK_SIZE[] = "StrictSizeCheck";
 const char NAME_DISK_IMAGE_PATH[] = "DiskImageFile";
 const char NAME_USE_COW_DISK[] = "UseCopyOnWriteDisk";
+// I/O Uncore config key names
+const char NAME_UNCORE_MODE[]       = "UncoreMode";
+const char NAME_UNCORE_CQ_BATCH_N[] = "CQBatchN";
+const char NAME_UNCORE_CQ_BATCH_T[] = "CQBatchT";
+const char NAME_UNCORE_DB_BATCH_B[] = "DBBatchB";
 
 Config::Config() {
   pcieGen = PCIExpress::PCIE_3_X;
@@ -63,6 +68,11 @@ Config::Config() {
   enableDiskImage = false;
   strictDiskSize = false;
   useCopyOnWriteDisk = false;
+  // I/O Uncore defaults
+  uncoreMode     = 0;
+  uncoreCQBatchN = 8;
+  uncoreCQBatchT = 4000000;  // 4 µs in picoseconds
+  uncoreDBBatchB = 4;
 }
 
 bool Config::setConfig(const char *name, const char *value) {
@@ -167,6 +177,27 @@ bool Config::setConfig(const char *name, const char *value) {
   else if (MATCH_NAME(NAME_USE_COW_DISK)) {
     useCopyOnWriteDisk = convertBool(value);
   }
+  else if (MATCH_NAME(NAME_UNCORE_MODE)) {
+    uncoreMode = (uint32_t)strtoul(value, nullptr, 10);
+    if (uncoreMode > 2) {
+      panic("UncoreMode must be 0 (disabled), 1 (Mode A), or 2 (Mode B)");
+    }
+  }
+  else if (MATCH_NAME(NAME_UNCORE_CQ_BATCH_N)) {
+    uncoreCQBatchN = (uint32_t)strtoul(value, nullptr, 10);
+    if (uncoreCQBatchN == 0) {
+      panic("CQBatchN must be >= 1");
+    }
+  }
+  else if (MATCH_NAME(NAME_UNCORE_CQ_BATCH_T)) {
+    uncoreCQBatchT = strtoull(value, nullptr, 10);
+  }
+  else if (MATCH_NAME(NAME_UNCORE_DB_BATCH_B)) {
+    uncoreDBBatchB = (uint32_t)strtoul(value, nullptr, 10);
+    if (uncoreDBBatchB == 0) {
+      panic("DBBatchB must be >= 1");
+    }
+  }
   else {
     ret = false;
   }
@@ -237,6 +268,18 @@ uint64_t Config::readUint(uint32_t idx) {
       break;
     case NVME_LBA_SIZE:
       ret = lbaSize;
+      break;
+    case NVME_UNCORE_MODE:
+      ret = uncoreMode;
+      break;
+    case NVME_UNCORE_CQ_BATCH_N:
+      ret = uncoreCQBatchN;
+      break;
+    case NVME_UNCORE_CQ_BATCH_T:
+      ret = uncoreCQBatchT;
+      break;
+    case NVME_UNCORE_DB_BATCH_B:
+      ret = uncoreDBBatchB;
       break;
   }
 

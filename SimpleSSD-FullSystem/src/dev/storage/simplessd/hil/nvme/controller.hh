@@ -23,6 +23,7 @@
 #define __HIL_NVME_CONTROLLER__
 
 #include <list>
+#include <vector>
 #include <unordered_map>
 
 #include "hil/nvme/abstract_subsystem.hh"
@@ -40,6 +41,48 @@ namespace HIL {
 namespace NVMe {
 
 class Interface;
+
+// ---------------------------------------------------------------------------
+// I/O Uncore simulation types  (used by Controller private state below)
+// ---------------------------------------------------------------------------
+
+typedef enum {
+  UNCORE_MODE_DISABLED = 0,  //!< No batching; baseline behaviour
+  UNCORE_MODE_A        = 1,  //!< Transparent CQE batching + SQ threshold guard
+  UNCORE_MODE_B        = 2,  //!< Mode A + SPDK cooperative hint register
+} UncoreMode;
+
+struct UncoreConfig {
+  UncoreMode mode     = UNCORE_MODE_DISABLED;
+  uint32_t   cqBatchN = 8;        //!< Flush staging buffer when N CQEs pending
+  uint64_t   cqBatchT = 4000000;  //!< Flush timeout in picoseconds
+  uint32_t   dbBatchB = 4;        //!< Min SQEs visible before SQ collection
+};
+
+//! One entry in the CQE staging buffer (before published to host CQ memory).
+//! CQEntryWrapper has no default constructor so we provide one explicitly.
+struct UncoreCQPendingEntry {
+  CQEntryWrapper wrapper;    //!< Complete CQE and all wrapper metadata
+  uint64_t       arrivedAt;  //!< getTick() when submit() was called
+  UncoreCQPendingEntry(const CQEntryWrapper &w, uint64_t t)
+      : wrapper(w), arrivedAt(t) {}
+};
+
+//! All counters and histograms accumulated during a simulation run.
+struct UncoreStats {
+  uint64_t sqesVisible       = 0;  //!< Cumulative SQE count seen by Gate 1
+  uint64_t collectDeferred   = 0;  //!< Gate 1 deferrals (threshold not met)
+  uint64_t collectAllowed    = 0;  //!< Gate 1 pass-throughs (threshold met)
+  uint64_t cqesGenerated     = 0;  //!< I/O CQEs entering staging buffer
+  uint64_t cqesAdminBypassed = 0;  //!< Admin CQEs bypassing staging (immediate)
+  uint64_t cqesPublished     = 0;  //!< CQEs flushed from staging to lCQFIFO
+  uint64_t flushByCount      = 0;  //!< Flushes triggered by count threshold N
+  uint64_t flushByTimeout    = 0;  //!< Flushes triggered by timeout T
+  uint64_t flushByShutdown   = 0;  //!< Force-drain flushes on shutdown
+  uint64_t flushDepthHist[64] = {}; //!< Histogram: CQEs per flush (bucket=depth)
+};
+
+// ---------------------------------------------------------------------------
 
 typedef union _RegisterTable {
   uint8_t data[64];
@@ -112,6 +155,28 @@ class Controller : public StatObject {
   uint64_t workInterval;
   uint64_t lastWorkAt;
 
+  // --- I/O Uncore state ---
+  UncoreConfig  uncoreCfg;    //!< Knobs read from fast_ssd.cfg at construction
+  UncoreStats   uncoreStats;  //!< Accumulated counters (exported via getStatValues)
+
+  //! Staging buffer: I/O CQEs held here until count- or time-threshold fires.
+  //! Empty when uncoreCfg.mode == UNCORE_MODE_DISABLED.
+  std::vector<UncoreCQPendingEntry> uncorePendingCQE;
+
+  //! Per-SQueue SQE visibility snapshot for Gate 1 logging.
+  //! Sized to sqsize in the constructor.
+  std::vector<uint32_t> uncoreDbAccumPerQ;
+
+  //! Mode B hint value: reflects lCQFIFO.size() after each flush.
+  //! Exposed as a 4-byte read-only register at BAR0+UNCORE_HINT_REG_OFFSET.
+  uint32_t uncoreHintReady;
+
+  //! Guard to prevent double-scheduling of uncoreFlushEvent.
+  bool uncoreFlushScheduled;
+
+  //! Timeout-driven CQE flush event (fires cqBatchT ps after first staging CQE).
+  Event uncoreFlushEvent;
+
   bool checkQueue(SQueue *, DMAFunction &, void *);
 
  public:
@@ -146,6 +211,13 @@ class Controller : public StatObject {
   void submit(CQEntryWrapper &);
   void reserveCompletion();
   void completion();
+
+  // --- I/O Uncore public interface ---
+  //! Drain all staged CQEs to lCQFIFO and call reserveCompletion().
+  //! isShutdown=true records the flush as a shutdown drain in statistics.
+  void uncoreFlushCQBuffer(bool isShutdown = false);
+  //! Return the Mode B readiness hint value (mirrors lCQFIFO.size()).
+  uint32_t getUncoreHintReady() const { return uncoreHintReady; }
 
   void getStatList(std::vector<Stats> &, std::string) override;
   void getStatValues(std::vector<double> &) override;
