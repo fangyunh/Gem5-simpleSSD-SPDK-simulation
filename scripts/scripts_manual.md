@@ -1,112 +1,126 @@
 # Scripts Manual
 
-This document summarizes each shell script in this folder and provides a complete end-to-end workflow for running Phase 1 in gem5 full-system mode.
+Top-level index for `scripts/`. The folder is organized into:
 
-## Script Purpose (Shell Scripts)
+- **`scripts/`** (this directory) — shared infrastructure that both
+  evaluation pieces use: gem5 boot/stop, console attach, SPDK Docker
+  rebuild, disk-image management.
+- **`scripts/phase1_4k/`** — 4 KB random-read evaluation (paper §2 Fig 2,
+  §4 Fig 3 + Fig 4). See `scripts/phase1_4k/README.md` for the full
+  inventory and typical workflows.
+- **`scripts/bigann/`** — DiskANN + BigANN-1B trace capture/replay
+  (paper §4.1 workload-realism evidence). Currently a placeholder; see
+  `scripts/bigann/README.md` and `docs/DISKANN_TRACE_CAPTURE.md`.
 
-- bake_disk_image.sh
-  - Mounts the gem5 disk image and copies the host repo into the guest image under /root/SimpleSSD_Gem5_simulation.
-  - Requires root/sudo.
-  - Uses rsync with default excludes to fit the 2GB image; add --exclude to skip more paths (the disk image itself is excluded).
+## Shared infrastructure (this folder)
 
-- resize_disk_image.sh
-  - Resizes the disk image and expands the partition/filesystem.
-  - Requires qemu-img and root/sudo.
+- **`boot_gem5.sh`** — Starts, stops, or checks status of the gem5
+  full-system simulation. Accepts environment overrides for kernel,
+  disk image, SSD config, checkpoints, and readfile script. Used by
+  both 4K and BigANN drivers.
+- **`console_gem5.sh`** — Opens a host-side console to the gem5 serial
+  port using `nc` or `telnet`.
+- **`build_spdk_docker.sh`** — Rebuilds the SSSE3-free, glibc-2.27-compatible
+  `guest_spdk_nvme_perf` binary inside an Ubuntu 18.04 Docker image.
+  **Re-run after any change to `spdk/lib/nvme/`** (e.g., the Mode 2B
+  patch and the State_Dealloc split landed 2026-05-09).
+- **`build_guest_kernel_vfio.sh`** — Builds a custom guest kernel with
+  vfio + virtio-9p built in. Required only on first setup or kernel
+  changes.
+- **`bake_disk_image.sh`** — Mounts the gem5 disk image and copies the
+  host repo into it. **Requires root/sudo.** *Not used in the default
+  virtio-9p workflow.* Keep available for the rare case where 9p is
+  unavailable.
+- **`resize_disk_image.sh`** — Resizes the disk image. **Requires
+  qemu-img and root/sudo.** Not used in the default workflow.
 
-- boot_gem5.sh
-  - Starts, stops, or checks status of the gem5 full-system simulation on the host.
-  - Accepts environment overrides for kernel, disk image, SSD config, checkpoints, and readfile script.
+## 4 KB random-read evaluation (`scripts/phase1_4k/`)
 
-- console_gem5.sh
-  - Opens a host-side console to the gem5 serial port using nc or telnet.
+See `scripts/phase1_4k/README.md` for full details. Quick reference:
 
-- driver_bdev.sh
-  - Orchestrates a bdev malloc/null performance sweep inside the gem5 guest.
-  - Boots gem5, attaches a console, injects commands, and captures logs (auto mode).
+| Use case | Command (from repo root) |
+|---|---|
+| Single-core sweep | `./scripts/phase1_4k/driver_phase1.sh --auto …` |
+| Multi-core invariance | `./scripts/phase1_4k/driver_phase1_multicore.sh --auto …` |
+| bdev baseline (sanity) | `./scripts/phase1_4k/driver_bdev.sh --auto …` |
+| Sequential sweep | `bash scripts/phase1_4k/run_sweep_baseline.sh …` |
+| Plot Figure 2 | `python scripts/phase1_4k/plot_io_breakdown.py …` |
+| Plot per-core invariance | `python scripts/phase1_4k/plot_multicore_gem5.py …` |
 
-- driver_phase1.sh
-  - Orchestrates the full Phase 1 random read workload inside the gem5 guest.
-  - Supports readfile mode (boot-time script) and console injection mode.
+## BigANN trace evaluation (`scripts/bigann/`)
 
-- extract_phase1_results.sh
-  - Mounts the gem5 disk image and copies results from the guest back to the host.
-  - Requires root/sudo.
+Placeholder. See `scripts/bigann/README.md` for the planned inventory
+and `docs/DISKANN_TRACE_CAPTURE.md` for the capture procedure.
 
-- phase1_bdev.sh
-  - Runs the bdevperf malloc-mode sweep in the guest.
-  - Produces phase1-style CSV output under results/bdev_data/.
+## Default workflow (virtio-9p, no sudo)
 
-- phase1_run.sh
-  - Runs the Phase 1 random read sweep against the NVMe/SimpleSSD device in the guest.
-  - Produces phase1_results.csv under results/phase1_runs/.
+The default workflow uses **virtio-9p** to share the host workspace with
+the gem5 guest. No disk-image baking, no result extraction, no sudo.
 
-- phase1_run_multicore.sh
-  - Runs Phase 1 across multiple cores in the guest with a predefined multicore sweep.
+```bash
+# Single-core Phase 1 smoke test
+./scripts/phase1_4k/driver_phase1.sh --auto \
+  --qd "16" --ios "4096" --qpairs "1" \
+  --repeats 1 --steady-time 5 --uncore-mode 0 \
+  --tag phase1_smoke
 
-## End-to-End Workflow (Baked Image)
+# Multi-core invariance
+SSD_CFG=fast_ssd_highiops.cfg ./scripts/phase1_4k/driver_phase1_multicore.sh \
+  --auto --core-counts "1 2" \
+  --qd 128 --ios 4096 --qpairs 1 \
+  --repeats 1 --steady-time 5 \
+  --uncore-mode 0 --tag verify_multicore
 
-This workflow assumes you have root/sudo access and want to avoid host file sharing.
+# Full sweep (paper §4 evidence collection — runs sequentially, ~hours)
+SSD_CFG=fast_ssd_highiops.cfg ./scripts/phase1_4k/driver_phase1.sh --auto \
+  --qd "16 32 64 128" --ios "4096" --qpairs "1" \
+  --repeats 1 --steady-time 5 --uncore-mode 2 \
+  --tag phase1_paper_modeB
+```
 
-0) (Optional) Grow the disk image if you need more space
+Results land directly on the host workspace at
+`results/phase1_runs/<tag>/core*_qp*/phase1_results.csv` (or
+`core_count*_qp*/` for the multi-core variant). No extraction step.
 
-- From the repo root:
+## Legacy "baked image" workflow (root required, deprecated)
 
-  ./scripts/resize_disk_image.sh \
-    --disk-image ./assets/x86-ubuntu.img \
-    --size 8G
+This workflow predates the virtio-9p default and is documented only for
+the rare environment where 9p is unavailable. It requires root/sudo and
+is incompatible with the project's no-sudo policy
+(see `docs/PAPER_IMPL_TODO.md` §0.6).
 
-1) Bake the repo into the disk image (root required)
+```bash
+# 0) Resize disk if needed (root)
+./scripts/resize_disk_image.sh --disk-image ./assets/x86-ubuntu.img --size 8G
 
-- From the repo root (SimpleSSD_Gem5_simulation/):
+# 1) Bake the repo into the image (root)
+sudo ./scripts/bake_disk_image.sh \
+  --disk-image ./assets/x86-ubuntu.img \
+  --src-repo . --dst-path /root/SimpleSSD_Gem5_simulation
 
-  sudo ./scripts/bake_disk_image.sh \
-    --disk-image ./assets/x86-ubuntu.img \
-    --src-repo . \
-    --dst-path /root/SimpleSSD_Gem5_simulation
+# 2) Run inside gem5 (no sudo at runtime)
+./scripts/phase1_4k/driver_phase1.sh --auto \
+  --qd "16" --ios "4096" --repeats 1 --steady-time 10 \
+  --tag phase1_smoke
 
-2) Run the Phase 1 smoke test in gem5
+# 3) Extract results back out of the disk image (root)
+sudo ./scripts/phase1_4k/extract_phase1_results.sh \
+  --disk-image ./assets/x86-ubuntu.img --run-tag phase1_smoke
+```
 
-- From the repo root:
-
-  ./scripts/driver_phase1.sh --auto \
-    --qd "16" \
-    --ios "4096" \
-    --repeats 1 \
-    --steady-time 10 \
-    --tag phase1_smoke
-
-3) Extract results from the disk image (root required)
-
-- From the repo root:
-
-  sudo ./scripts/extract_phase1_results.sh \
-    --disk-image ./assets/x86-ubuntu.img \
-    --run-tag phase1_smoke
-
-- Results will be copied into ./results/phase1_runs/phase1_smoke/ on the host.
-
-4) Scale up the sweep
-
-- Adjust parameters in driver_phase1.sh or override via CLI:
-
-  ./scripts/driver_phase1.sh --auto \
-    --cores "1" \
-    --qpairs "1" \
-    --qd "16 32 64 128" \
-    --ios "4096 16384" \
-    --repeats 3 \
-    --steady-time 30 \
-    --tag phase1_full
-
-5) Extract results for the full run (root required)
-
-  sudo ./scripts/extract_phase1_results.sh \
-    --disk-image ./assets/x86-ubuntu.img \
-    --run-tag phase1_full
+If the repo or SPDK binaries change in this workflow, **re-bake the
+image** before the next run. In the default 9p workflow this step is
+unnecessary — script edits take effect on the next gem5 launch.
 
 ## Notes
 
-- Use readfile mode (default) for deterministic, boot-time execution.
-- If the repo is not baked into the disk image, use virtio-9p sharing: run driver_phase1.sh with --vio-9p 1 (or rely on the default --auto-9p 1) and ensure diod is installed on the host.
-- If the repo or SPDK binaries change, re-run bake_disk_image.sh before the next run.
-- If you want to run the bdev-only sweep instead, use driver_bdev.sh and then extract results from results/bdev_data/ inside the guest image.
+- Use readfile mode (default in both drivers) for deterministic
+  boot-time execution.
+- If the repo is not baked into the disk image, virtio-9p (default
+  `--auto-9p 1`) handles file sharing automatically. `diod` must be
+  installed on the host.
+- `boot_gem5.sh stop` is the **only** correct way to stop gem5 — never
+  `kill -9`, which orphans `diod` and may require a reboot.
+- After any change to `spdk/lib/nvme/` source, re-run
+  `scripts/build_spdk_docker.sh` so `docker_artifacts/guest_spdk_nvme_perf`
+  picks up the patches before the next sweep.

@@ -1371,3 +1371,109 @@ Reviewers at top-tier architecture venues are going to aggressively probe the bo
 
 - **The Issue:** Deriving `hint_ready` by combinationally adding the `batch_count` of 64 separate queues creates a deep 64-input adder tree. At 1 GHz, this combinational logic will almost certainly violate timing constraints (negative slack) during synthesis.
 - **The Fix:** Make `hint_ready` a single, global 32-bit register. Increment it in `C_ENQUEUE` when any CQE arrives, and decrement it in `C_WRITEBACK` by the exact flush count. This replaces a massive adder tree with simple +1 / -N arithmetic.
+---
+
+## 13. Future-Phase Mechanisms for 2-3× CPU-Cycle Reduction
+
+### 13.1 Motivation
+
+Phase 3 (Mode B mailbox / submission-side offload) elides roughly **360 ns/IO** of host work (PRP-list construction, 64-byte SQE pack, doorbell ring) at QD=128 4 KB random read. Translating via Little's Law, this is **~1.4× IOPS lift over the Mode 0 baseline** (0.82 M → ~1.2 M IOPS). The remaining ~860 ns/IO is split across:
+
+- `Tracker_Alloc` (~218 ns) — `TAILQ_REMOVE/INSERT` on SPDK's per-qpair free/outstanding tracker lists
+- `State_Dealloc` (~295 ns) — symmetric TAILQ ops on completion + `queue_depth--` + application callback
+- `Submit_Preamble`, `CQE_Detect`, `Tracker_Lookup`, "other SPDK overhead" — smaller residuals
+
+To push the headline lift to **2-3×**, the natural next step is to extend the uncore into the per-IO **bookkeeping work** that flanks the data path. Four mechanisms are characterized below, ranked by leverage and ordered by feasibility.
+
+### 13.2 Mechanism #1 — Hardware Tracker Free-List Ring  *(big win, no host API change)*
+
+**Function.** Per qpair, the controller maintains an on-die FIFO of free Command IDs. The host pops the next free CID with one MMIO load (replaces SPDK's `TAILQ_FIRST(&free_tr)` plus `TAILQ_REMOVE/INSERT` sequence). On CQE generation, hardware automatically recycles the CID back into the FIFO; the host's `State_Dealloc` no longer touches the free list.
+
+**Host-side savings (vs Mode B v1):**
+- ~218 ns from `Tracker_Alloc` (fully eliminated; CID and tracker bookkeeping moves on-die)
+- ~150 ns from `State_Dealloc` (TAILQ_REMOVE + TAILQ_INSERT_HEAD elided; the application callback remains on host)
+- **Total ~370 ns/IO**, bringing per-IO budget to ~490 ns/IO ≈ **2.5× IOPS lift over Mode 0**.
+
+**RTL footprint (estimated at ASAP7 7 nm):**
+
+| Resource | Sizing |
+|---|---|
+| Free-CID FIFO storage | 16 b × QUEUE_DEPTH × NUM_QPAIRS ≈ 64 KB SRAM for 128 qpairs × 256 entries (banked alongside SQ Engine SRAM) |
+| Head/tail pointer per qpair | ~10 b × 2 × 128 = ~320 B |
+| Push FSM (CQE-completion side) | ~50 gates |
+| Pop FSM (MMIO-read side) | ~50 gates |
+| New MMIO surface | One read at `BAR0 + free_cid_offset(qid)` per submission; decoder is a one-case extension of the existing BAR0 demux |
+
+**Cycle budget at 1 GHz.** 1 cycle to pop (the MMIO read latency dominates anyway); 1 cycle to push on CQE. Total free-list traffic per IO: 2 SRAM ops on a banked region that is independent of the SQE / CQE banks already specified — **no new arbiter contention**.
+
+**Feasibility verdict: easily feasible.** Strictly simpler than the SQ Engine the current spec already commits to. SRAM and arbiter framework already in place. **Recommended for Phase 4.**
+
+### 13.3 Mechanism #2 — Hardware Queue-Depth Counter  *(trivial, modest win, enables #1)*
+
+**Function.** Expose the existing per-qpair credit counter (from §6 Credit Manager) via MMIO read. Host reads the current queue depth in 1 cycle instead of incrementing/decrementing its software shadow counter.
+
+**Host-side savings:** ~5-10 ns/IO. Small in isolation, but **structurally required by Mechanism #1**: once the hardware owns the free-list, the host's software `qpair->queue_depth` shadow becomes stale unless it can read the authoritative counter back.
+
+**RTL footprint.** 16 b counter per qpair × 128 qpairs = 256 B. Already implied by the existing Credit Manager (line 714 `credit_avail` signal). Adds one MMIO read decoder case.
+
+**Feasibility verdict: trivial.** Essentially free if Mechanism #1 is built. **Recommended for Phase 4 alongside #1.**
+
+### 13.4 Mechanism #3 — Hardware Completion-Callback Dispatcher  *(invasive, biggest residual win)*
+
+**Function.** Today, on CQE the host: (i) scans CQ phase bit, (ii) looks up tracker by CID, (iii) reads `tr->cb_fn` and `tr->cb_arg`, (iv) calls `cb_fn(cb_arg, cpl)`. Mechanism #3 replaces (i)-(iii) with hardware: applications pre-register `(cb_fn, cb_arg)` pairs alongside each submission (extending the mailbox compact descriptor from 24 B → 40 B). On CQE, hardware writes a **completion record** `(cb_fn, cb_arg, cpl)` to a host-DRAM ring buffer. The host poll loop reads this ring and calls `cb_fn` directly — never touching the standard NVMe CQ or tracker table.
+
+**Host-side savings:**
+- ~20 ns `CQE_Detect` (no CQ phase-bit scan)
+- ~11 ns `Tracker_Lookup` (no array index)
+- ~50-100 ns "other SPDK overhead" (poll-loop scaffolding around CQ scanning)
+- Application callback (~50-100 ns) remains on host — must run user C code
+- **Total ~80-130 ns/IO**, bringing per-IO budget to ~360-410 ns/IO ≈ **3× IOPS lift over Mode 0**.
+
+**RTL footprint:**
+
+| Resource | Sizing |
+|---|---|
+| Per-tracker callback storage `(cb_fn, cb_arg)` | 16 B × QUEUE_DEPTH × NUM_QPAIRS ≈ 512 KB SRAM |
+| Completion-record DMA engine | New on-die DMA path writing 24 B records into a host-resident ring buffer |
+| Ring head/tail descriptors per qpair | ~64 B |
+| New MMIO surface | Ring base + size registration |
+
+**Cycle budget at 1 GHz.** 2-3 cycles to look up `(cb_fn, cb_arg)` from the tracker store; 1 cycle to enqueue the completion record into the on-die FIFO before DMA emission.
+
+**Programming-model change.** Applications must register callbacks in advance via a new SPDK API (`spdk_nvme_register_callback_queue()`-style). This crosses the architectural boundary the current RTL spec explicitly drew (line 1368: *"Define this RTL as the Control Plane Uncore"*) — Mechanism #3 introduces a control-AND-data-plane uncore, comparable in scope to a small SmartNIC.
+
+**Feasibility verdict: technically feasible but architecturally larger.** ~0.5-1.0 mm² additional area at 7 nm. **Future work / v2 paper scope** — not recommended for the current submission cycle.
+
+### 13.5 Mechanism #4 — Multi-Bit Hint Register Refinement  *(easy, small win)*
+
+**Function.** Replace the current 32-bit `hint_ready = lCQFIFO.size()` register with a typed hint:
+- bits [15:0] = pending-completion count (today's value)
+- bits [31:16] = oldest-completion age in 1024-cycle ticks
+
+SPDK uses the age field to size its CQ-scan width adaptively — pre-allocating the right number of completion-record buffers and skipping calls to `nvme_complete_request` that would scan empty entries.
+
+**Host-side savings:** ~10-20 ns/IO at QD=128 where 97% of polls are idle and SPDK's poll-loop control flow dominates.
+
+**RTL footprint.** Trivial. The CQ Engine already tracks CQE arrival timestamps for its T-threshold flush logic; expose the age of the oldest staged CQE as 16 extra bits in the hint register. <0.01 mm².
+
+**Feasibility verdict: trivially feasible** and mostly an SPDK-side change. **Recommended for Phase 4** — bundle with #1 and #2.
+
+### 13.6 Cumulative Projection
+
+| Configuration | Per-IO budget | IOPS @ QD=128 | Lift vs Mode 0 | Phase scope |
+|---|---:|---:|---:|---|
+| Mode B v1 (Phase 3 — this spec) | ~860 ns | 1.16 M | 1.4× | Control-plane uncore, submission-side only |
+| + Mech #1 + #2 (Phase 4) | ~490 ns | 2.05 M | **2.5×** | Same scope; reuses SQ Engine SRAM and arbiter framework |
+| + Mech #4 (Phase 4) | ~470 ns | 2.13 M | 2.6× | Trivial CQ Engine extension |
+| + Mech #3 (Phase 5 / v2 paper) | ~370 ns | 2.64 M | **3.2×** | Control + data-plane uncore; new application API |
+
+### 13.7 Rationale for the Selected Phase 4 Scope
+
+Mechanisms #1, #2, and #4 are bundled because:
+
+1. **All three are pure control-plane extensions.** They fit inside the architectural boundary the current RTL spec already drew — same SRAM model, same arbiter framework, same MMIO decoder, same FSM style.
+2. **No new SPDK API.** The only host-side change is replacing `TAILQ_FIRST(&free_tr)` with one MMIO read; this is a one-line patch to `nvme_pcie_qpair_submit_request`. Applications and middleware see no change.
+3. **They share infrastructure.** Mechanism #2 (queue-depth counter) is a structural dependency of Mechanism #1 (free-list ring) — once the hardware owns CID allocation it must also expose the in-flight count. Mechanism #4 (multi-bit hint) reuses the existing CQ Engine timing path.
+4. **They deliver the headline 2.5× lift** the paper title implies, while preserving the spec author's explicit "Control Plane Uncore" framing (line 1368).
+
+Mechanism #3 is deferred because it requires a new on-die DMA engine, ~0.5-1 MB additional SRAM, and a new application-facing API. Its incremental contribution (2.5× → 3.2×) is real but does not justify crossing the control-plane/data-plane boundary in this paper cycle.

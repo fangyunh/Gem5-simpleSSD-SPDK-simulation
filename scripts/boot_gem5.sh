@@ -42,6 +42,10 @@ start_gem5() {
     exit 0
   fi
 
+  if [ -s "$LOG_FILE" ]; then
+    cp -p "$LOG_FILE" "${LOG_FILE}.prev"
+  fi
+
   # Activate conda and set libpython path for gem5.
   # Some conda hooks use unset vars; guard with set +u.
   # shellcheck source=/dev/null

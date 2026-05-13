@@ -97,7 +97,9 @@ class NVMeInterface(PciDevice):
     PMCAPCapabilities = 0x0003  # A6    Device Specific Initialization (No) | Version (1.2)
     PMCAPCtrlStatus = 0x0008    # A8    No Soft Reset
 
-    BAR0Size = '8192B'  # 8KB (512 queue pairs)
+    BAR0Size = '32768B'  # 32KB: 4KB regs + 4KB doorbells + 4KB hint/reserved
+                         # + 4KB mailbox @ 0x3000 + 1KB free-CID ring @ 0x3400
+                         # + 1KB queue-depth read @ 0x3800 + reserved tail
     BAR4Size = '8192B'  # 8KB for MSI-X 512 vectors
     BAR5Size = '4096B'  # 4KB (64B) for MSI-X 512 vectors
 

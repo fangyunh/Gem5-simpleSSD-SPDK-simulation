@@ -27,9 +27,18 @@ namespace PCIExpress {
 
 static const uint32_t maxPayloadSize = 4096;                        // Bytes
 static const uint32_t packetOverhead = 36;                          // Bytes
-static const uint32_t internalDelay[PCIE_NUM] = {19, 70, 115};      // Symbol
-static const float encoding[PCIE_NUM] = {1.25f, 1.25f, 1.015625f};  // Ratio
-static const uint32_t delay[PCIE_NUM] = {3200, 1600, 1000};  // pico-second
+// Gen4/5 use the same 128b/130b encoding as Gen3, and per-lane raw bit time
+// halves and quarters respectively. internalDelay (TLP/switch overhead) is
+// kept at 115 symbols for Gen4/5 — modern controllers have similar or
+// slightly lower per-TLP latency.
+static const uint32_t internalDelay[PCIE_NUM] = {19, 70, 115, 115, 115};
+static const float encoding[PCIE_NUM] = {1.25f, 1.25f, 1.015625f,
+                                         1.015625f, 1.015625f};  // Ratio
+// delay[] = picoseconds-per-byte-per-lane (before encoding).
+//   Gen3: 1000 ps  (8 GT/s)
+//   Gen4:  500 ps  (16 GT/s)
+//   Gen5:  250 ps  (32 GT/s)
+static const uint32_t delay[PCIE_NUM] = {3200, 1600, 1000, 500, 250};
 
 uint64_t calculateDelay(PCIE_GEN gen, uint8_t lane, uint64_t bytesize) {
   uint64_t nTLP = MAX(DIVCEIL(bytesize, maxPayloadSize), 1);

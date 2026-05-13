@@ -1,0 +1,348 @@
+%% IAU: Assisting the CPU Core for Next-Generation Multi-Million IOPS NVMe Devices
+%% Target venue: IEEE Computer Architecture Letters (CAL)
+%% Format: IEEEtran, two-column, 10pt; 4 pages text + ~1 page refs
+%%
+%% Drafting status (2026-05-11, third revision):
+%%   - Abstract  : Tight 4-move structure (background / problem / design /
+%%                 effectiveness). Numbers left as TODO placeholders until
+%%                 Mode 2A/2B sweeps land.
+%%   - Section 1 : fully drafted; references [1]-[5], [8], [18] wired in.
+%%   - Section 2 : Mode 0 QD-sweep numbers (QD=16/32/64/128) wired in for the
+%%                 per-IO decomposition and the polling-asymptote anchor stat.
+%%                 State_Dealloc split still pending TODO[split_rebake].
+%%   - Sections 3-6: not yet drafted in this pass.
+%%
+%% TODO markers still in use:
+%%   TODO[baseline]            -- Mode 0 baseline IOPS at QD=128 in Abstract
+%%   TODO[iau]                 -- IAU-mode IOPS at QD=128 in Abstract
+%%   TODO[speedup]             -- IAU / baseline throughput ratio in Abstract
+%%   TODO[cycles_pct]          -- per-IO cycle reduction percent in Abstract
+%%   TODO[mode_bracket]        -- Mode 2A / Mode 2B savings (elsewhere in body)
+%%   TODO[split_rebake]        -- State_Dealloc library/callback split
+%%   TODO[author_info]         -- fill in author/affiliation block
+%%
+\documentclass[journal]{IEEEtran}
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{url}
+
+% Compact spacing helpers; CAL has a hard 4-page limit on the body.
+\usepackage[compact]{titlesec}
+
+\begin{document}
+
+% ============================================================================
+% Title block
+% ============================================================================
+\title{IAU: Assisting the CPU Core for Next-Generation\\Multi-Million IOPS NVMe Devices}
+
+\author{%
+  % TODO[author_info]: replace placeholders below.
+  Anonymous Authors%
+  \thanks{Manuscript submitted to IEEE Computer Architecture Letters,
+  \today.}%
+}
+
+\markboth{IEEE Computer Architecture Letters, Vol.~XX, No.~Y, 20XX}%
+{Author~\MakeLowercase{\textit{et~al.}}: IAU}
+
+\maketitle
+
+% ============================================================================
+% Abstract  --  Mode 0 baseline wired (QD=128, 4 KB random read).
+%                TODO[mode_bracket]: insert Mode 2A / Mode 2B savings.
+% ============================================================================
+\begin{abstract}
+Next-generation NVMe SSDs are reaching tens of millions of IOPS to serve
+retrieval-augmented inference, billion-scale vector search, and
+graph workloads that treat NAND as an active memory tier rather than a
+bulk store. At that rate, the host CPU---not the device---becomes the
+bottleneck: even a state-of-the-art user-space polling stack spends the
+bulk of its cycles on per-IO bookkeeping, address translation, and
+empty completion-queue scans, leaving the device chronically
+under-utilized. We propose \emph{IAU} (I/O Assistant Uncore), an
+on-chiplet block in the CPU uncore---placed alongside the PCIe root
+complex and integrated memory controller---that executes NVMe queues in
+hardware via SRAM-resident submission/completion queues, doorbell
+aggregation, and completion suppression, while preserving the existing
+SPDK programming model. On a full-system gem5+SimpleSSD+SPDK platform,
+IAU lifts sustained 4\,KB random-read throughput from
+TODO[baseline]~M~IOPS to TODO[iau]~M~IOPS at QD=128---a
+TODO[speedup]$\times$ improvement---while reducing per-IO host cycles
+by TODO[cycles\_pct]\,\% within a per-block SRAM footprint of 329~KB to
+2.6~MB synthesized for ASAP7 7\,nm.
+\end{abstract}
+
+\begin{IEEEkeywords}
+NVMe, SSD, storage stacks, CPU uncore, chiplet architecture, queue
+offload, million-IOPS storage, full-system simulation, SPDK.
+\end{IEEEkeywords}
+
+% ============================================================================
+% Section 1 -- Introduction
+%
+% Locked structure (PAPER_CHAPTER_PLAN.md):
+%   Para 1: HOOK + WORKLOAD          refs [1][2][5]
+%   Para 2: WALL                     refs [3][18]
+%   Para 3: PLACEMENT + ANALOGY      refs [4][8]
+%   Para 4: CONTRIBUTIONS            (no refs)
+% Both memorable lines wired in verbatim.
+% ============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+\IEEEPARstart{T}{he} arrival of solid-state devices capable of sustaining
+$10^8$ random IOPS, demonstrated publicly in 2025 alongside roadmaps from
+storage vendors targeting GPU-storage direct paths for inference
+serving~\cite{kioxia_fms2025}, has shifted what storage-touching workloads
+look like. In-storage retrieval-augmented generation pipelines now spend the
+majority of their wall-clock time on storage access: a recent in-storage
+acceleration study reports that 61\,\% of the cost of retrieval-augmented
+generation as a service is the retrieval read path itself~\cite{ragx_isca25}.
+Underneath these workloads, GPU-initiated I/O frameworks such as BaM submit
+NVMe requests directly from streaming multiprocessors and consume billions
+of small reads per second on a single
+node~\cite{bam_asplos23}. The data device side has thus moved from
+\emph{passive bulk store} to \emph{active memory tier}: NAND-resident
+indices and embeddings are read with the access pattern and rate of DRAM,
+not files. AI retrieval workloads are turning NAND into an active memory
+tier, but the host CPU is the wall.
+
+That wall is software. State-of-the-art user-space NVMe drivers replace
+interrupts with polling, replace per-IO system calls with shared
+submission/completion queues, and re-use pinned huge-page buffers to keep
+the IO path off the kernel boundary~\cite{spdk_modern_apis,spdk_docs}. Even
+so, every IO incurs the same hot loop on the host core: tracker allocation,
+PRP-list page-walks, command construction, a fenced doorbell ring, a
+DRAM-resident completion-queue scan, and a callback invocation. The result
+is a per-IO software floor that the recent measurement-based survey of
+\emph{libaio}, \emph{io\_uring}, and SPDK independently
+confirmed~\cite{spdk_modern_apis}. When the device can supply tens of
+millions of IOPS, that floor becomes the binding constraint: on our
+gem5+SimpleSSD+SPDK platform with a 32~M~IOPS device ceiling, unmodified
+SPDK at QD=128 delivers 0.82~M~IOPS (a $\sim$40\,$\times$ shortfall) while
+\emph{idling} on 97\,\% of its polling calls---no amount of batching,
+polling tuning, or NUMA pinning crosses it, because the floor is set by
+memory-hierarchy round-trips and an $\mathcal{O}$(qpairs) completion scan
+that neither queue-depth nor core-count can amortize.
+
+The historical resolution to a similar architectural wall is informative.
+When DRAM access latencies started to dominate processor pipelines in the
+early 2000s, AMD relocated the memory controller from the chipset onto the
+CPU die, eliminating a fabric hop and changing the latency
+class~\cite{opteron_imc}. That decision was not about adding a faster
+external memory; it was about placement. The cost-benefit framing of which
+storage tier deserves what level of integration was independently re-derived
+for modern hardware by the thirty-year retrospective on the
+five-minute-rule~\cite{five_minute_rule_30}, which places NVMe firmly in
+the on-die-integration regime now that device latency is at the
+microsecond mark. We close the wall where the memory-controller wall was
+closed: in the CPU uncore.
+
+We make the following contributions.
+
+\begin{enumerate}
+  \item \textbf{An IAU architecture} that relocates NVMe queue
+        execution into the CPU uncore, organized around three
+        cooperating mechanisms---SRAM-resident submission/completion
+        queues, doorbell aggregation, and completion suppression---and a
+        dual software contract: a transparent Mode~2A requiring no SPDK
+        changes, and a poll-lite Mode~2B requiring a $\sim$45-line patch
+        confined to a single hot-path polling function.
+  \item \textbf{A measurement-based characterization} of the per-IO
+        software overhead in SPDK on a full-system
+        gem5+SimpleSSD+SPDK platform with a 32~M~IOPS device ceiling,
+        under which unmodified SPDK saturates at 0.82~M~IOPS at QD=128,
+        decomposed into named per-stage costs that expose the
+        memory-hierarchy floor and the $\mathcal{O}$(qpairs) completion
+        scan as the structural asymptotes.
+  \item \textbf{A bracket evaluation} showing that the transparent mode
+        recovers the elidable host work under unmodified SPDK (lower
+        bound), while the poll-lite mode further eliminates the
+        multi-queue scanning overhead with a minimal patch (upper
+        bound), with SRAM and area envelopes anchored on ASAP7 7\,nm
+        Yosys synthesis for four design points spanning 329~KB to
+        2.6~MB per uncore block.
+\end{enumerate}
+
+% ============================================================================
+% Section 2 -- The Host I/O Wall
+%
+% Locked structure (PAPER_CHAPTER_PLAN.md):
+%   2.1 Per-IO Cost Decomposition (~250 words + FIG 2)
+%   2.2 Why Software Cannot Close This Gap (~400 words)
+%       memory-hierarchy floor + multi-queue scanning O(qpairs)
+%   2.3 Bridge sentence (~50 words)
+%
+% Anchor stat (2026-05-11 Mode 0 sweep, 4 KB random read, qpair=1):
+%   QD=16   : 776,253 IOPS,  86.0% idle polls, Completions_Per_Call = 2.29
+%   QD=32   : 799,927 IOPS,  90.9% idle polls, Completions_Per_Call = 2.91
+%   QD=64   : 812,491 IOPS,  94.7% idle polls, Completions_Per_Call = 3.38
+%   QD=128  : 819,253 IOPS,  97.1% idle polls, Completions_Per_Call = 3.66
+%   IOPS asymptote ~0.82 M; SSD ceiling ~32 M -> ~40x shortfall.
+%
+% Energy out of scope per ¶§2.2_scope_locked.
+% ============================================================================
+\section{The Host I/O Wall}
+\label{sec:wall}
+
+\subsection{Per-IO cost decomposition}
+\label{sec:wall:decomp}
+
+To attribute the gap between device capability and observed throughput, we
+instrument SPDK's per-IO path along the eight stages it traverses on every
+submission and completion---submit-preamble, tracker allocation, PRP-list
+construction (address translation), command construction, fence, doorbell
+write, completion-queue-entry phase-bit detection, tracker lookup, and
+state deallocation---and report the per-stage cost in nanoseconds against
+the cycles-per-IO budget that the device implies. The instrumentation
+splits the legacy \emph{state-deallocation} stage into a library-teardown
+component (CID free-list splice, tracker push, qpair statistics) and an
+application-callback component (workload-defined; for \texttt{spdk\_nvme\_perf}
+this is a latency-histogram update). The split matters because hardware
+can absorb the library teardown but cannot replace application code;
+reporting the two as one stage would credit hardware for cycles it cannot
+fundamentally reach.
+
+The instrumented path reveals that the dominant per-IO work is not the
+doorbell or fence---both consume single-digit nanoseconds in the
+steady-state polling regime (1.06\,ns and 1.82\,ns per IO at QD=128,
+respectively)---but a combination of address translation, state
+deallocation, and an unattributed per-call overhead that together absorb
+roughly two-thirds of the elidable per-IO budget.
+Across a 4\,KB random-read Mode~0 sweep on our gem5+SimpleSSD+SPDK
+platform, host throughput saturates at \textbf{0.82~M~IOPS} at
+QD=128---only 2.6\,\% of the 32~M~IOPS device ceiling---while
+\textbf{97.1\,\%} of polling calls return zero useful completions
+(i.e., the host scans the completion queue and finds nothing) and the
+average useful-completions-per-call is \textbf{3.66}. The asymptote is
+visible across the QD sweep: throughput climbs only modestly from
+776,253~IOPS at QD=16 to 819,253~IOPS at QD=128 ($+5.5$\,\%), while
+median latency grows almost linearly with QD (20.5, 39.9, 78.8,
+156.7\,$\mu$s), confirming that work is queueing in the host---not the
+device---across the regime.
+As a corroborating low-QD check, the QD=16 datum represents a
+$4.6\times$ lift over the SSD-cycle-bound baseline of the same
+simulator, with an average per-IO software cost of 8.04\,$\mu$s on the
+submission side plus 1.42\,$\mu$s on the completion side.
+The behavior is monotonic across queue depths: as the device gets out of
+the way, the host wastes a larger fraction of cycles on bookkeeping and on
+scanning queues for work that has not yet arrived.
+
+Figure~\ref{fig:io-breakdown} (placeholder) decomposes per-IO cycles into
+the named stages plus an \emph{other-SPDK-overhead} residual at two queue
+depths, distinguishing hardware-elidable cycles from the
+application-callback component that any architectural offload must
+preserve. At QD=128 the per-IO costs of the largest elidable stages are
+140.6\,ns (submit preamble), 217.8\,ns (tracker allocation), 337.0\,ns
+(PRP-list address translation), 51\,ns (command construction),
+20\,ns (CQE phase-bit detection), 11\,ns (tracker lookup), and 295.2\,ns
+(legacy state-deallocation bundle)---roughly 1{,}073\,ns of per-IO
+software-fabric work, against $\sim$2.9\,ns of physical-boundary work
+(doorbell + fence combined) and a $\sim$1.22\,$\mu$s per-IO budget set
+by the 0.82~M~IOPS asymptote. The full per-stage table after the
+State\_Dealloc split is populated by TODO[split\_rebake]; the
+application-callback portion of the legacy bundle is expected to be on
+the order of tens of nanoseconds and the library teardown the remainder.
+
+\subsection{Why software cannot close this gap}
+\label{sec:wall:floors}
+
+Two independent floors bound any purely software stack at the IOPS
+regime motivated in Section~\ref{sec:intro}.
+
+\paragraph*{Memory-hierarchy floor}
+Every IO performs at least three DRAM round-trips that no batching
+strategy can eliminate: one read of the submission-queue tracker pool to
+allocate a command identifier, one DRAM-resident write of the NVMe
+submission queue entry, and one read of the completion queue entry on
+the polling side. At a conservative 80\,ns per round-trip and a single
+core, these three traversals alone establish a $\sim$240\,ns/IO floor
+that bounds aggregate throughput at roughly 4\,M~IOPS per core before
+any productive work is performed. Our measured Mode~0 throughput of
+0.82~M~IOPS sits a factor of $\sim$5$\times$ below this DRAM-limited
+ceiling, which tells us two things: (i) the per-stage software work
+characterized in Section~\ref{sec:wall:decomp}---and not memory
+bandwidth---is what binds the host today, and (ii) even an oracle
+elimination of every elidable software stage cannot push a single core
+past the 4\,M~IOPS structural ceiling. Figure~\ref{fig:dram-floor}
+(placeholder) reports DRAM bytes per IO from the gem5 memory-system
+counters; the measurement is expected to be invariant under queue depth
+and core count for fixed IO size, as required of a structural floor.
+
+\paragraph*{Multi-queue scanning $\mathcal{O}(\textrm{qpairs})$}
+Modern NVMe deployments use one submission/completion queue pair per
+core or per worker thread, and the SPDK polling routine scans each
+qpair's completion queue head pointer on every polling call. The cost
+of producing a single useful completion therefore scales with the
+number of registered qpairs, not with the number of completions
+actually waiting. Even at the single-qpair configuration measured here,
+the symptom is already visible: 97.1\,\% of polling calls at QD=128
+return zero completions, and the
+\texttt{scans\_per\_completion} statistic of 0.273 reflects an
+amortization advantage that exists only because doorbell aggregation
+batches eight to sixteen IOs per ring---an advantage that erodes as
+soon as a second qpair must also be scanned on every poll. A multi-qpair
+sweep is in progress and will report the linear growth in
+\texttt{scans\_per\_completion} and the corresponding fall in
+completions-per-call as qpair count rises at fixed device load.
+
+These two floors are structural, not implementation-specific: the
+memory-hierarchy floor is set by physics; the multi-queue scan is set
+by the NVMe submission model in which the host must visit every queue
+to find new entries. Optimizing the per-stage costs that
+Section~\ref{sec:wall:decomp} enumerates flattens the curve, but cannot
+move the asymptote. The case for hardware is the union of both floors.
+\emph{Energy per IO is intentionally out of scope in this section:
+per-IO joules track per-IO cycles modulo a constant-energy-per-instruction
+factor; reporting it adds no independent information beyond what the
+cycles-per-IO measurement above already establishes, and on-die power
+feasibility for the proposed mechanism is covered in
+Section~\ref{sec:eval} from RTL synthesis.}
+
+\subsection{Bridge}
+\label{sec:wall:bridge}
+
+The work above the device is hot-loop bookkeeping that the host CPU is
+structurally bad at and which the device cannot help with. The natural
+fix is to give it that hardware.
+
+% ============================================================================
+% Sections 3-6: NOT YET DRAFTED in this pass.
+%
+% Placeholders so the document compiles and the section structure is visible.
+% Drafting order from PAPER_CHAPTER_PLAN.md section 4 reading guide:
+%   sec:arch (3)  -> next pass; depends on Figure 1 and RTL_design reports
+%   sec:eval (4)  -> next pass; depends on Mode 1/2 sweep completion
+%   sec:related (5) -> next pass; Table 1 already designed
+%   sec:conclusion (6) -> last pass; closing line locked
+% ============================================================================
+\section{IAU Architecture}
+\label{sec:arch}
+% TODO[sec3]: full draft in the next pass.
+
+\section{Evaluation}
+\label{sec:eval}
+% TODO[sec4]: full draft once Mode 1 + Mode 2B sweeps complete.
+
+\section{Related Work}
+\label{sec:related}
+% TODO[sec5]: full draft; Table 1 already designed in PAPER_CHAPTER_PLAN.md.
+
+\section{Conclusion}
+\label{sec:conclusion}
+% TODO[sec6]: closing line locked: "The uncore is the placement that
+% scales."
+
+% ============================================================================
+% Bibliography
+% ============================================================================
+\bibliographystyle{IEEEtran}
+\bibliography{paper}
+
+\end{document}

@@ -75,7 +75,47 @@ struct nvme_pcie_ctrlr {
 	bool is_remapped;
 
 	volatile uint32_t *doorbell_base;
+
+	/* IO-Uncore Mode 2B (poll-lite) host hint register mapped at BAR0+0x2000.
+	 * Set in nvme_pcie_ctrlr_allocate_bars() iff env SPDK_UNCORE_MODE_B=1
+	 * AND the mapped BAR0 covers the offset; NULL otherwise. When non-NULL
+	 * and reading 0, the polling fast path returns immediately, eliminating
+	 * the DRAM CQ phase-bit scan. Reads are uncached and load-acquire-safe
+	 * on x86 for aligned 4-byte access. */
+	volatile uint32_t *uncore_hint_reg;
+
+	/* IO-Uncore Mode 2B mailbox region (BAR0 + MAILBOX_BASE_OFFSET).  When
+	 * non-NULL, nvme_pcie_qpair_submit_tracker emits 3 sequential 8-byte
+	 * writes to uncore_mailbox_base + (qpair_id * MAILBOX_STRIDE_BYTES/8)
+	 * for each submitted I/O instead of building a 64-byte SQE in DRAM
+	 * and ringing the standard NVMe SQ tail doorbell.  Set in
+	 * nvme_pcie_ctrlr_allocate_bars() iff env SPDK_UNCORE_MODE_B=1 AND
+	 * the mapped BAR0 covers the mailbox region; NULL otherwise. */
+	volatile uint64_t *uncore_mailbox_base;
+
+	/* Mechanism #1 (HW free-CID ring) read endpoints, one uint32 per qpair.
+	 * Reading uncore_free_cid_base[qid] pops the next free CID for that
+	 * qpair (low 16 bits); returns 0xFFFF when the ring is empty.  Replaces
+	 * SPDK's TAILQ_REMOVE(&free_tr) on the submission hot path. */
+	volatile uint32_t *uncore_free_cid_base;
+
+	/* Mechanism #2 (HW queue-depth counter) read endpoints, one uint32 per
+	 * qpair.  Pure read, no side effect.  Replaces SPDK's software
+	 * pqpair->qpair.queue_depth counter. */
+	volatile uint32_t *uncore_qdepth_base;
 };
+
+/* Mode 2B mailbox layout — must match SimpleSSD's MailboxBase/Stride cfg.
+ * Per-qid slot = 32 bytes (4 × uint64_t).  Slot 0 (admin) is allocated
+ * but unused by the submit hot path. */
+#define MAILBOX_BASE_OFFSET   0x3000
+#define MAILBOX_STRIDE_BYTES  0x20
+/* Mechanism #1 (free-CID ring) + #2 (queue-depth counter) read endpoints.
+ * Must match SimpleSSD's FreeCIDBase cfg.  Layout (per qpair):
+ *   uncore_free_cid_base[qid]                         -> next free CID
+ *   uncore_qdepth_base[qid]   = base + 0x400 / sizeof  -> inflight count */
+#define FREE_CID_BASE_OFFSET  0x3400
+#define QDEPTH_BASE_OFFSET    0x3800
 
 extern __thread struct nvme_pcie_ctrlr *g_thread_mmio_ctrlr;
 

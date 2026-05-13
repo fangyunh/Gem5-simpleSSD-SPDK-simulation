@@ -120,11 +120,11 @@ Always launch from inside `tmux` — runs take hours and gem5 is detached
 
 ```bash
 # Smoke test (quick sanity check)
-./scripts/driver_phase1.sh --auto \
+./scripts/phase1_4k/driver_phase1.sh --auto \
   --qd "16" --ios "4096" --repeats 1 --steady-time 10 --tag phase1_smoke
 
 # Full sweep
-./scripts/driver_phase1.sh --auto \
+./scripts/phase1_4k/driver_phase1.sh --auto \
   --cores "1" --qpairs "1" \
   --qd "16 32 64 128" --ios "4096 16384" \
   --repeats 3 --steady-time 30 --tag phase1_full
@@ -145,9 +145,9 @@ sudo ./scripts/extract_phase1_results.sh \
 ### 6. Plot results
 
 ```bash
-python3 scripts/plot_phase1.py        # IOPS / latency curves
-python3 scripts/plot_multicore.py     # multi-core sweep
-python3 scripts/plot_bdev.py          # bdev malloc/null baseline
+python3 scripts/phase1_4k/plot_phase1.py        # IOPS / latency curves
+python3 scripts/phase1_4k/plot_multicore_gem5.py     # multi-core sweep
+python3 scripts/phase1_4k/plot_bdev.py          # bdev malloc/null baseline
 ```
 
 See `scripts/scripts_manual.md` for every flag and the end-to-end workflow.
@@ -223,7 +223,7 @@ python3 scripts/plot_ppa.py                 # PDF figures for the paper
   instructions that would crash on gem5's simulated CPU).
 - **Conda is required at run-time** — `boot_gem5.sh` auto-detects it to find
   `libpython` for gem5's Python scripting interface.
-- Re-run `bake_disk_image.sh` after any change to `scripts/phase1_run.sh`,
+- Re-run `bake_disk_image.sh` after any change to `scripts/phase1_4k/phase1_run.sh`,
   `docker_artifacts/`, or `fast_ssd.cfg`.
 - Never `kill -9` the gem5 process. Use `./scripts/boot_gem5.sh stop`.
 

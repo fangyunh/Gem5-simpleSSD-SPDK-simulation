@@ -8,7 +8,9 @@ extern "C" {
 #endif
 static __rte_always_inline void *
 rte_memcpy(void *dst, const void *src, size_t n)
-{ return memcpy(dst, src, n); }
+{
+	return memcpy(dst, src, n);
+}
 static __rte_always_inline void *
 rte_memcpy_aligned(void *dst, const void *src, size_t n)
 { return memcpy(dst, src, n); }

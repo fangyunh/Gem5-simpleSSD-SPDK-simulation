@@ -57,6 +57,39 @@ struct UncoreConfig {
   uint32_t   cqBatchN = 8;        //!< Flush staging buffer when N CQEs pending
   uint64_t   cqBatchT = 4000000;  //!< Flush timeout in picoseconds
   uint32_t   dbBatchB = 4;        //!< Min SQEs visible before SQ collection
+  // --- Mode 2 deep-offload Mailbox SQ Engine ---
+  uint32_t   mailboxBase         = 0x3000;
+  uint32_t   mailboxStride       = 0x20;
+  uint16_t   mailboxLatchCycles  = 1;
+  uint16_t   mailboxDecodeCycles = 8;
+  uint16_t   mailboxInjectCycles = 4;
+  // --- Mechanism #1 + #2 + #4 (CQ-side deep offload) ---
+  uint32_t   freeCidBase           = 0x3400;
+  uint16_t   freeCidLatencyCycles  = 2;
+  uint64_t   hintAgeGranularityPs  = 1024000ULL;
+};
+
+//! Per-qid free Command-ID ring (Mechanism #1).  Hardware maintains the
+//! authoritative free-CID pool; the host pops one per submission via an
+//! MMIO read.  Hardware automatically recycles the CID into the ring on
+//! CQE flush.  `inflight` is the live in-flight count exposed via
+//! Mechanism #2's queue-depth read endpoint.
+struct FreeCIDRing {
+  std::vector<uint16_t> ring;
+  uint32_t head     = 0;
+  uint32_t tail     = 0;
+  uint32_t depth    = 0;  // current FIFO occupancy (number of free CIDs)
+  uint32_t inflight = 0;  // CIDs currently issued to host, not yet recycled
+};
+
+//! Per-qid mailbox 3-word latch (compact-SQE assembly buffer).
+//!   words[0..2]: the three 8-byte writes received in order
+//!   nextWord   : 0/1/2 = which word the next incoming write fills; 3 = ready
+//!   lastTick   : tick of the last accepted write (telemetry / stall detect)
+struct MailboxLatch {
+  uint64_t words[3] = {0, 0, 0};
+  uint8_t  nextWord = 0;
+  uint64_t lastTick = 0;
 };
 
 //! One entry in the CQE staging buffer (before published to host CQ memory).
@@ -80,6 +113,18 @@ struct UncoreStats {
   uint64_t flushByTimeout    = 0;  //!< Flushes triggered by timeout T
   uint64_t flushByShutdown   = 0;  //!< Force-drain flushes on shutdown
   uint64_t flushDepthHist[64] = {}; //!< Histogram: CQEs per flush (bucket=depth)
+  // --- Mode 2 Mailbox SQ-Engine stats ---
+  uint64_t mailboxSubmissions     = 0;  //!< 3rd word received -> SQE injected
+  uint64_t mailboxLatchResets     = 0;  //!< Mid-sequence word violations
+  uint64_t mailboxOversizeFallbk  = 0;  //!< nlb > 1 page (rejected; SPDK falls back)
+  uint64_t mailboxDecodeCyclesTot = 0;  //!< Cumulative S_DECODE cycles
+  uint64_t mailboxInjectCyclesTot = 0;  //!< Cumulative S_INJECT cycles
+  // --- Mechanism #1 / #2 / #4 stats ---
+  uint64_t freeCidPops        = 0;  //!< Mech #1: successful free-CID pops
+  uint64_t freeCidPushes      = 0;  //!< Mech #1: CIDs recycled on CQE flush
+  uint64_t freeCidStarvations = 0;  //!< Mech #1: pop returned 0xFFFF (ring empty)
+  uint64_t qdepthReads        = 0;  //!< Mech #2: MMIO reads of in-flight count
+  uint64_t hintTypedReads     = 0;  //!< Mech #4: reads of typed hint register
 };
 
 // ---------------------------------------------------------------------------
@@ -176,6 +221,78 @@ class Controller : public StatObject {
 
   //! Timeout-driven CQE flush event (fires cqBatchT ps after first staging CQE).
   Event uncoreFlushEvent;
+
+  // --- Mode 2 deep-offload Mailbox SQ Engine state ---
+  //! Per-qid latch (sized to cqsize in ctor; admin qid=0 also allocated but
+  //! unused by the Mode B SPDK path).
+  std::vector<MailboxLatch> mailboxLatches;
+  //! Scheduled event that fires (decode+inject)*1ns after the 3rd word lands.
+  //! On fire it scans the latches and injects any qid whose nextWord==3.
+  Event mailboxInjectEvent;
+
+  // --- Mechanism #1 + #2 + #4 state ---
+  //! Per-qid free-CID ring; sized to cqsize in ctor.
+  std::vector<FreeCIDRing> freeCidRings;
+  //! Mechanism #4: getTick() when the oldest currently-pending CQE arrived
+  //! in the staging buffer.  Used to compute the age field of the typed hint.
+  uint64_t hintOldestArrivalTicks = 0;
+
+  // --- Fast-path statistical timing model (NVMeVirt-style) ---
+  // When enabled, bypasses the HIL/ICL/FTL/PAL pipeline. Each I/O is
+  // mapped to a NAND channel, assigned target_completion_time from a
+  // per-channel statistical timer, and routed through Controller::submit()
+  // at that time. submit() preserves all I/O-Uncore mechanisms, so
+  // Mode 0/1/2B continue to differentiate at the host PCIe boundary.
+  struct FastPathConfig {
+    bool     enabled        = false;
+    uint64_t lminPs         = 3000000;    // 3 us
+    uint64_t tmaxPerCh      = 1000000;    // 1 M IOPS / channel
+    uint64_t spacingPs      = 1000;       // 1e12 / tmaxPerCh, computed in ctor
+    uint16_t channels       = 32;         // sourced from [pal] Channel
+    uint32_t channelPolicy  = 1;          // 0 = round-robin, 1 = LBA-hash
+    uint64_t maxOutstanding = 8192;
+  } fastPathCfg;
+
+  std::vector<uint64_t>      fastPathChannelNextFree;
+  uint16_t                   fastPathRRCounter;
+
+  struct FastPathPending {
+    CQEntryWrapper entry;
+    uint64_t       target_time;
+    FastPathPending(CQEntryWrapper &e, uint64_t t) : entry(e), target_time(t) {}
+  };
+  std::list<FastPathPending> fastPathQueue;
+
+  Event                      fastPathFireEvent;
+  bool                       fastPathFireScheduled;
+
+  uint64_t fastPathStats_dispatched   = 0;
+  uint64_t fastPathStats_completed    = 0;
+  uint64_t fastPathStats_dropped_full = 0;
+
+  void fastPathEnqueue(SQEntryWrapper &req);
+  void fastPathFire();
+  void fastPathRescheduleNext();
+
+  // --- Mode 2 Mailbox SQ Engine handlers ---
+  //! S_LATCH_0/1/2 plus arming of mailboxInjectEvent when nextWord reaches 3.
+  void handleMailboxWrite(uint16_t qid, uint8_t wordIdx,
+                          uint64_t value, uint64_t tick);
+  //! S_DECODE + S_INJECT: synthesize SQEntryWrapper, push into lSQFIFO,
+  //! schedule requestEvent so handleRequest picks it up via the Path-E
+  //! fast-path (or pSubsystem if fast-path is disabled).
+  void mailboxInject(uint16_t qid, uint64_t tick);
+
+  // --- Mechanism #1 / #2 / #4 ---
+  //! Pop the next free CID for `qid`; returns 0xFFFF if the ring is empty.
+  //! Side-effect: decrements depth, increments inflight, bumps freeCidPops.
+  uint16_t freeCidReadNext(uint16_t qid);
+  //! Push `cid` back into the ring for `qid` (CQE flush side).
+  void freeCidRecycle(uint16_t qid, uint16_t cid);
+  //! Return the current in-flight count (Mechanism #2's qdepth surface).
+  uint32_t getInflightCount(uint16_t qid) const;
+  //! Compute the typed hint register value (count:16, age_units:16).
+  uint32_t getMultiBitHint() const;
 
   bool checkQueue(SQueue *, DMAFunction &, void *);
 

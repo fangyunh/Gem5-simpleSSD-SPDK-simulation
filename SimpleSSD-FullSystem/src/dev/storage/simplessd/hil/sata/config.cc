@@ -70,6 +70,12 @@ bool Config::setConfig(const char *name, const char *value) {
       case 2:
         pcieGen = PCIExpress::PCIE_3_X;
         break;
+      case 3:
+        pcieGen = PCIExpress::PCIE_4_X;
+        break;
+      case 4:
+        pcieGen = PCIExpress::PCIE_5_X;
+        break;
       default:
         panic("Invalid PCI Express Generation");
         break;

@@ -217,6 +217,80 @@ static int g_latency_sw_tracking_level;
 
 static bool g_vmd;
 static const char *g_workload_type;
+
+/*
+ * BigANN/DiskANN trace replay support (paper §4.1 workload-realism evidence).
+ * When --trace-file <path>.bin is passed, submit_single_io() pulls the next
+ * (offset, size, op) tuple from the in-memory trace array instead of using
+ * the random/zipf/sequential generator. The .bin format is produced by
+ * scripts/bigann/trace_to_binary.py from the canonical trace CSV.
+ *
+ * Layout of one entry in the .bin file (16 bytes, little-endian):
+ *   uint64_t offset_bytes;
+ *   uint32_t size_bytes;
+ *   uint8_t  op;          // 'R' (read) or 'W' (write)
+ *   uint8_t  pad[3];
+ */
+struct perf_trace_entry {
+	uint64_t offset;
+	uint32_t size;
+	uint8_t  op;
+	uint8_t  pad[3];
+} __attribute__((packed));
+
+static const char *g_trace_path = NULL;
+static struct perf_trace_entry *g_trace_entries = NULL;
+static uint64_t g_trace_count = 0;
+static uint64_t g_trace_idx = 0;     /* atomic cursor; wraps mod g_trace_count */
+
+static int
+load_trace_file(const char *path)
+{
+	FILE *fp;
+	long fsize;
+
+	fp = fopen(path, "rb");
+	if (!fp) {
+		fprintf(stderr, "[trace] cannot open %s: %s\n", path, strerror(errno));
+		return -1;
+	}
+
+	if (fseek(fp, 0, SEEK_END) != 0) {
+		fclose(fp);
+		return -1;
+	}
+	fsize = ftell(fp);
+	rewind(fp);
+
+	if (fsize <= 0 || (fsize % (long)sizeof(struct perf_trace_entry)) != 0) {
+		fprintf(stderr, "[trace] %s: bad size %ld (must be multiple of %zu bytes)\n",
+			path, fsize, sizeof(struct perf_trace_entry));
+		fclose(fp);
+		return -1;
+	}
+
+	g_trace_count = (uint64_t)fsize / sizeof(struct perf_trace_entry);
+	g_trace_entries = malloc((size_t)fsize);
+	if (!g_trace_entries) {
+		fprintf(stderr, "[trace] malloc(%ld) failed\n", fsize);
+		fclose(fp);
+		return -1;
+	}
+
+	if (fread(g_trace_entries, sizeof(struct perf_trace_entry), g_trace_count, fp) !=
+	    g_trace_count) {
+		fprintf(stderr, "[trace] short read from %s\n", path);
+		free(g_trace_entries);
+		g_trace_entries = NULL;
+		fclose(fp);
+		return -1;
+	}
+	fclose(fp);
+
+	fprintf(stdout, "[trace] loaded %lu entries (%ld bytes) from %s\n",
+		g_trace_count, fsize, path);
+	return 0;
+}
 static TAILQ_HEAD(, ctrlr_entry) g_controllers = TAILQ_HEAD_INITIALIZER(g_controllers);
 static TAILQ_HEAD(, ns_entry) g_namespaces = TAILQ_HEAD_INITIALIZER(g_namespaces);
 static uint32_t g_num_namespaces = 0;
@@ -1470,7 +1544,18 @@ submit_single_io(struct perf_task *task)
 
 	assert(!ns_ctx->is_draining);
 
-	if (entry->zipf) {
+	if (g_trace_entries) {
+		/* Trace replay: pull next entry, wraparound on exhaustion.
+		 * The trace's offset/size are in bytes; offset_in_ios is in
+		 * units of g_io_size_bytes. Our trace is all 4 KB-aligned, so
+		 * dividing by g_io_size_bytes is exact when -o 4096. */
+		uint64_t i = __atomic_fetch_add(&g_trace_idx, 1, __ATOMIC_RELAXED) % g_trace_count;
+		offset_in_ios = g_trace_entries[i].offset / g_io_size_bytes;
+		if (spdk_unlikely(offset_in_ios >= entry->size_in_ios)) {
+			offset_in_ios = offset_in_ios % entry->size_in_ios;
+		}
+		task->is_read = (g_trace_entries[i].op == 'R' || g_trace_entries[i].op == 'r');
+	} else if (entry->zipf) {
 		offset_in_ios = spdk_zipf_generate(entry->zipf);
 	} else if (g_is_random) {
 		rand_value = spdk_rand_xorshift64(&seed);
@@ -1484,13 +1569,16 @@ submit_single_io(struct perf_task *task)
 
 	task->submit_tsc = spdk_get_ticks();
 
-	if ((g_rw_percentage == 100) ||
-	    (g_rw_percentage != 0 &&
-	     ((spdk_rand_xorshift64(&seed) % 100) < (uint64_t)g_rw_percentage))) {
-		task->is_read = true;
-	} else {
-		task->is_read = false;
+	if (!g_trace_entries) {
+		if ((g_rw_percentage == 100) ||
+		    (g_rw_percentage != 0 &&
+		     ((spdk_rand_xorshift64(&seed) % 100) < (uint64_t)g_rw_percentage))) {
+			task->is_read = true;
+		} else {
+			task->is_read = false;
+		}
 	}
+	/* In trace-replay mode, task->is_read was set above from the trace entry. */
 
 	rc = entry->fn_table->submit_io(task, ns_ctx, entry, offset_in_ios);
 
@@ -1936,6 +2024,7 @@ usage(char *program_name)
 	printf("\t--iova-mode <mode> specify DPDK IOVA mode: va|pa\n");
 	printf("\t--no-huge, SPDK is run without hugepages\n");
 	printf("\t--enforce-numa, SPDK is run with enforce-numa environment flag, useful to enforce NUMA restrictions on huge page allocations\n");
+	printf("\t--trace-file <path> replay a packed binary I/O trace (16-byte entries: u64 offset, u32 size, u8 op, 3-byte pad) -- overrides the random/zipf/sequential workload generator. See scripts/bigann/trace_to_binary.py to produce the binary from a canonical CSV.\n");
 	printf("\t--vfio-vf-token <token> VF token (UUID) shared between SR-IOV PF and VFs for vfio_pci driver\n");
 	spdk_trace_mask_usage(stdout, "-y");
 	printf("\n");
@@ -2469,6 +2558,8 @@ static const struct option g_perf_cmdline_opts[] = {
 	{"log-level", required_argument, NULL, PERF_LOG_LEVEL},
 #define PERF_ENFORCE_NUMA   275
 	{"enforce-numa",			no_argument,	NULL, PERF_ENFORCE_NUMA},
+#define PERF_TRACE_FILE		276
+	{"trace-file",			required_argument,	NULL, PERF_TRACE_FILE},
 #define PERF_HELP_FULL 'v'
 	{"help-full", no_argument, NULL, PERF_HELP_FULL},
 	/* Should be the last element */
@@ -2824,6 +2915,9 @@ parse_args(int argc, char **argv, struct spdk_env_opts *env_opts)
 			}
 			log_level_set = true;
 			break;
+		case PERF_TRACE_FILE:
+			g_trace_path = optarg;
+			break;
 		case PERF_HELP:
 			usage_basic(argv[0]);
 			return HELP_RETURN_CODE;
@@ -2967,6 +3061,18 @@ parse_args(int argc, char **argv, struct spdk_env_opts *env_opts)
 	}
 
 	g_file_optind = optind;
+
+	/* Trace replay (paper §4.1 workload-realism evidence). Load once,
+	 * after argument parsing has validated the rest of the options. The
+	 * trace file is the .bin produced by scripts/bigann/trace_to_binary.py. */
+	if (g_trace_path) {
+		if (load_trace_file(g_trace_path) != 0) {
+			return 1;
+		}
+		/* Trace is read-only; force the read-percentage knobs to a
+		 * consistent state so the random/zipf paths are inert. */
+		g_rw_percentage = 100;
+	}
 
 	return 0;
 }

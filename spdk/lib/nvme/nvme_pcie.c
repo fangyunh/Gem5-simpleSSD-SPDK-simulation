@@ -786,6 +786,68 @@ nvme_pcie_ctrlr_allocate_bars(struct nvme_pcie_ctrlr *pctrlr)
 	pctrlr->regs = (volatile struct spdk_nvme_registers *)addr;
 	pctrlr->regs_size = size;
 	pctrlr->doorbell_base = (volatile uint32_t *)&pctrlr->regs->doorbell[0].sq_tdbl;
+
+	/* IO-Uncore Mode 2B: opportunistically map the on-die uncore's hint
+	 * register at BAR0+0x2000 AND the mailbox region at BAR0+0x3000.
+	 * Activated by env var SPDK_UNCORE_MODE_B=1; both pointers left NULL
+	 * (fully dormant, identical to vanilla SPDK behaviour) when the env
+	 * var is unset or the BAR is too small to cover the offsets. */
+	pctrlr->uncore_hint_reg      = NULL;
+	pctrlr->uncore_mailbox_base  = NULL;
+	pctrlr->uncore_free_cid_base = NULL;
+	pctrlr->uncore_qdepth_base   = NULL;
+	{
+		const char *env = getenv("SPDK_UNCORE_MODE_B");
+		if (env != NULL && atoi(env) != 0) {
+			if (size >= 0x2004) {
+				pctrlr->uncore_hint_reg = (volatile uint32_t *)
+					((uint8_t *)addr + 0x2000);
+				NVME_CTRLR_NOTICELOG(&pctrlr->ctrlr,
+					"IO-Uncore Mode 2B: hint register mapped at BAR0+0x2000\n");
+			} else {
+				NVME_CTRLR_WARNLOG(&pctrlr->ctrlr,
+					"IO-Uncore Mode 2B requested but BAR0 size %" PRIu64
+					" is too small for offset 0x2000; disabling hint\n", size);
+			}
+
+			/* Mailbox region needs room for at least one I/O qpair slot
+			 * (admin slot at qid=0 unused).  Reserve 256 bytes (=8 slots)
+			 * as a sanity bound; SimpleSSD's BAR0 is normally 16 KB. */
+			if (size >= MAILBOX_BASE_OFFSET + 256) {
+				pctrlr->uncore_mailbox_base = (volatile uint64_t *)
+					((uint8_t *)addr + MAILBOX_BASE_OFFSET);
+				NVME_CTRLR_NOTICELOG(&pctrlr->ctrlr,
+					"IO-Uncore Mode 2B: mailbox region mapped at BAR0+0x%x\n",
+					MAILBOX_BASE_OFFSET);
+			} else {
+				NVME_CTRLR_WARNLOG(&pctrlr->ctrlr,
+					"IO-Uncore Mode 2B requested but BAR0 size %" PRIu64
+					" is too small for mailbox at offset 0x%x; mailbox disabled\n",
+					size, MAILBOX_BASE_OFFSET);
+			}
+
+			/* Mechanism #1 + #2: free-CID ring and queue-depth read endpoints.
+			 * Need room for the qdepth region (which sits above the free-CID
+			 * region); reserve 256 bytes (= 64 qpairs of 4-byte slots) past
+			 * the qdepth base. */
+			if (size >= QDEPTH_BASE_OFFSET + 256) {
+				pctrlr->uncore_free_cid_base = (volatile uint32_t *)
+					((uint8_t *)addr + FREE_CID_BASE_OFFSET);
+				pctrlr->uncore_qdepth_base = (volatile uint32_t *)
+					((uint8_t *)addr + QDEPTH_BASE_OFFSET);
+				NVME_CTRLR_NOTICELOG(&pctrlr->ctrlr,
+					"IO-Uncore Mech #1/#2: free-CID @ BAR0+0x%x, "
+					"qdepth @ BAR0+0x%x\n",
+					FREE_CID_BASE_OFFSET, QDEPTH_BASE_OFFSET);
+			} else {
+				NVME_CTRLR_WARNLOG(&pctrlr->ctrlr,
+					"IO-Uncore Mech #1/#2 requested but BAR0 size %" PRIu64
+					" is too small (need >= 0x%x); Mech #1/#2 disabled\n",
+					size, QDEPTH_BASE_OFFSET + 256);
+			}
+		}
+	}
+
 	nvme_pcie_ctrlr_map_cmb(pctrlr);
 	nvme_pcie_ctrlr_map_pmr(pctrlr);
 

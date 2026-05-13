@@ -29,9 +29,11 @@ namespace SimpleSSD {
 namespace PCIExpress {
 
 typedef enum {
-  PCIE_1_X,  // PCI Express Gen. 1.x
-  PCIE_2_X,  // PCI Express Gen. 2.x
-  PCIE_3_X,  // PCI Express Gen. 3.x
+  PCIE_1_X,  // PCI Express Gen. 1.x  (2.5 GT/s/lane)
+  PCIE_2_X,  // PCI Express Gen. 2.x  (5 GT/s/lane)
+  PCIE_3_X,  // PCI Express Gen. 3.x  (8 GT/s/lane)
+  PCIE_4_X,  // PCI Express Gen. 4.x  (16 GT/s/lane)
+  PCIE_5_X,  // PCI Express Gen. 5.x  (32 GT/s/lane)
   PCIE_NUM
 } PCIE_GEN;
 

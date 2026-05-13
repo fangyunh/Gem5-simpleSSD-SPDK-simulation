@@ -1,0 +1,415 @@
+diff --git a/spdk/app/spdk_nvme_perf/perf.c b/spdk/app/spdk_nvme_perf/perf.c
+index 9564bb19..cf8e03f5 100644
+--- a/spdk/app/spdk_nvme_perf/perf.c
++++ b/spdk/app/spdk_nvme_perf/perf.c
+@@ -217,6 +217,80 @@ static int g_latency_sw_tracking_level;
+ 
+ static bool g_vmd;
+ static const char *g_workload_type;
++
++/*
++ * BigANN/DiskANN trace replay support (paper §4.1 workload-realism evidence).
++ * When --trace-file <path>.bin is passed, submit_single_io() pulls the next
++ * (offset, size, op) tuple from the in-memory trace array instead of using
++ * the random/zipf/sequential generator. The .bin format is produced by
++ * scripts/bigann/trace_to_binary.py from the canonical trace CSV.
++ *
++ * Layout of one entry in the .bin file (16 bytes, little-endian):
++ *   uint64_t offset_bytes;
++ *   uint32_t size_bytes;
++ *   uint8_t  op;          // 'R' (read) or 'W' (write)
++ *   uint8_t  pad[3];
++ */
++struct perf_trace_entry {
++	uint64_t offset;
++	uint32_t size;
++	uint8_t  op;
++	uint8_t  pad[3];
++} __attribute__((packed));
++
++static const char *g_trace_path = NULL;
++static struct perf_trace_entry *g_trace_entries = NULL;
++static uint64_t g_trace_count = 0;
++static uint64_t g_trace_idx = 0;     /* atomic cursor; wraps mod g_trace_count */
++
++static int
++load_trace_file(const char *path)
++{
++	FILE *fp;
++	long fsize;
++
++	fp = fopen(path, "rb");
++	if (!fp) {
++		fprintf(stderr, "[trace] cannot open %s: %s\n", path, strerror(errno));
++		return -1;
++	}
++
++	if (fseek(fp, 0, SEEK_END) != 0) {
++		fclose(fp);
++		return -1;
++	}
++	fsize = ftell(fp);
++	rewind(fp);
++
++	if (fsize <= 0 || (fsize % (long)sizeof(struct perf_trace_entry)) != 0) {
++		fprintf(stderr, "[trace] %s: bad size %ld (must be multiple of %zu bytes)\n",
++			path, fsize, sizeof(struct perf_trace_entry));
++		fclose(fp);
++		return -1;
++	}
++
++	g_trace_count = (uint64_t)fsize / sizeof(struct perf_trace_entry);
++	g_trace_entries = malloc((size_t)fsize);
++	if (!g_trace_entries) {
++		fprintf(stderr, "[trace] malloc(%ld) failed\n", fsize);
++		fclose(fp);
++		return -1;
++	}
++
++	if (fread(g_trace_entries, sizeof(struct perf_trace_entry), g_trace_count, fp) !=
++	    g_trace_count) {
++		fprintf(stderr, "[trace] short read from %s\n", path);
++		free(g_trace_entries);
++		g_trace_entries = NULL;
++		fclose(fp);
++		return -1;
++	}
++	fclose(fp);
++
++	fprintf(stdout, "[trace] loaded %lu entries (%ld bytes) from %s\n",
++		g_trace_count, fsize, path);
++	return 0;
++}
+ static TAILQ_HEAD(, ctrlr_entry) g_controllers = TAILQ_HEAD_INITIALIZER(g_controllers);
+ static TAILQ_HEAD(, ns_entry) g_namespaces = TAILQ_HEAD_INITIALIZER(g_namespaces);
+ static uint32_t g_num_namespaces = 0;
+@@ -1470,7 +1544,18 @@ submit_single_io(struct perf_task *task)
+ 
+ 	assert(!ns_ctx->is_draining);
+ 
+-	if (entry->zipf) {
++	if (g_trace_entries) {
++		/* Trace replay: pull next entry, wraparound on exhaustion.
++		 * The trace's offset/size are in bytes; offset_in_ios is in
++		 * units of g_io_size_bytes. Our trace is all 4 KB-aligned, so
++		 * dividing by g_io_size_bytes is exact when -o 4096. */
++		uint64_t i = __atomic_fetch_add(&g_trace_idx, 1, __ATOMIC_RELAXED) % g_trace_count;
++		offset_in_ios = g_trace_entries[i].offset / g_io_size_bytes;
++		if (spdk_unlikely(offset_in_ios >= entry->size_in_ios)) {
++			offset_in_ios = offset_in_ios % entry->size_in_ios;
++		}
++		task->is_read = (g_trace_entries[i].op == 'R' || g_trace_entries[i].op == 'r');
++	} else if (entry->zipf) {
+ 		offset_in_ios = spdk_zipf_generate(entry->zipf);
+ 	} else if (g_is_random) {
+ 		rand_value = spdk_rand_xorshift64(&seed);
+@@ -1484,13 +1569,16 @@ submit_single_io(struct perf_task *task)
+ 
+ 	task->submit_tsc = spdk_get_ticks();
+ 
+-	if ((g_rw_percentage == 100) ||
+-	    (g_rw_percentage != 0 &&
+-	     ((spdk_rand_xorshift64(&seed) % 100) < (uint64_t)g_rw_percentage))) {
+-		task->is_read = true;
+-	} else {
+-		task->is_read = false;
++	if (!g_trace_entries) {
++		if ((g_rw_percentage == 100) ||
++		    (g_rw_percentage != 0 &&
++		     ((spdk_rand_xorshift64(&seed) % 100) < (uint64_t)g_rw_percentage))) {
++			task->is_read = true;
++		} else {
++			task->is_read = false;
++		}
+ 	}
++	/* In trace-replay mode, task->is_read was set above from the trace entry. */
+ 
+ 	rc = entry->fn_table->submit_io(task, ns_ctx, entry, offset_in_ios);
+ 
+@@ -1936,6 +2024,7 @@ usage(char *program_name)
+ 	printf("\t--iova-mode <mode> specify DPDK IOVA mode: va|pa\n");
+ 	printf("\t--no-huge, SPDK is run without hugepages\n");
+ 	printf("\t--enforce-numa, SPDK is run with enforce-numa environment flag, useful to enforce NUMA restrictions on huge page allocations\n");
++	printf("\t--trace-file <path> replay a packed binary I/O trace (16-byte entries: u64 offset, u32 size, u8 op, 3-byte pad) -- overrides the random/zipf/sequential workload generator. See scripts/bigann/trace_to_binary.py to produce the binary from a canonical CSV.\n");
+ 	printf("\t--vfio-vf-token <token> VF token (UUID) shared between SR-IOV PF and VFs for vfio_pci driver\n");
+ 	spdk_trace_mask_usage(stdout, "-y");
+ 	printf("\n");
+@@ -2469,6 +2558,8 @@ static const struct option g_perf_cmdline_opts[] = {
+ 	{"log-level", required_argument, NULL, PERF_LOG_LEVEL},
+ #define PERF_ENFORCE_NUMA   275
+ 	{"enforce-numa",			no_argument,	NULL, PERF_ENFORCE_NUMA},
++#define PERF_TRACE_FILE		276
++	{"trace-file",			required_argument,	NULL, PERF_TRACE_FILE},
+ #define PERF_HELP_FULL 'v'
+ 	{"help-full", no_argument, NULL, PERF_HELP_FULL},
+ 	/* Should be the last element */
+@@ -2824,6 +2915,9 @@ parse_args(int argc, char **argv, struct spdk_env_opts *env_opts)
+ 			}
+ 			log_level_set = true;
+ 			break;
++		case PERF_TRACE_FILE:
++			g_trace_path = optarg;
++			break;
+ 		case PERF_HELP:
+ 			usage_basic(argv[0]);
+ 			return HELP_RETURN_CODE;
+@@ -2968,6 +3062,18 @@ parse_args(int argc, char **argv, struct spdk_env_opts *env_opts)
+ 
+ 	g_file_optind = optind;
+ 
++	/* Trace replay (paper §4.1 workload-realism evidence). Load once,
++	 * after argument parsing has validated the rest of the options. The
++	 * trace file is the .bin produced by scripts/bigann/trace_to_binary.py. */
++	if (g_trace_path) {
++		if (load_trace_file(g_trace_path) != 0) {
++			return 1;
++		}
++		/* Trace is read-only; force the read-percentage knobs to a
++		 * consistent state so the random/zipf paths are inert. */
++		g_rw_percentage = 100;
++	}
++
+ 	return 0;
+ }
+ 
+diff --git a/spdk/dpdk/lib/eal/x86/include/rte_memcpy.h b/spdk/dpdk/lib/eal/x86/include/rte_memcpy.h
+index e8a896da..6ac3b664 100644
+--- a/spdk/dpdk/lib/eal/x86/include/rte_memcpy.h
++++ b/spdk/dpdk/lib/eal/x86/include/rte_memcpy.h
+@@ -8,7 +8,9 @@ extern "C" {
+ #endif
+ static __rte_always_inline void *
+ rte_memcpy(void *dst, const void *src, size_t n)
+-{ return memcpy(dst, src, n); }
++{
++	return memcpy(dst, src, n);
++}
+ static __rte_always_inline void *
+ rte_memcpy_aligned(void *dst, const void *src, size_t n)
+ { return memcpy(dst, src, n); }
+diff --git a/spdk/lib/nvme/nvme_internal.h b/spdk/lib/nvme/nvme_internal.h
+index 7380308f..5cf57cba 100644
+--- a/spdk/lib/nvme/nvme_internal.h
++++ b/spdk/lib/nvme/nvme_internal.h
+@@ -328,6 +328,9 @@ struct nvme_request {
+ 	uint64_t			t_cqe_valid_end;
+ 	uint64_t			t_tr_lookup_end;
+ 	uint64_t			t_dealloc_pre_end;
++	uint64_t			t_callback_start;
++	uint64_t			t_callback_end;
++	uint64_t			t_dealloc_post_end;
+ 
+ 	uint32_t			payload_size;
+ 
+diff --git a/spdk/lib/nvme/nvme_pcie.c b/spdk/lib/nvme/nvme_pcie.c
+index 60fab3c3..b2ad0ce2 100644
+--- a/spdk/lib/nvme/nvme_pcie.c
++++ b/spdk/lib/nvme/nvme_pcie.c
+@@ -786,6 +786,28 @@ nvme_pcie_ctrlr_allocate_bars(struct nvme_pcie_ctrlr *pctrlr)
+ 	pctrlr->regs = (volatile struct spdk_nvme_registers *)addr;
+ 	pctrlr->regs_size = size;
+ 	pctrlr->doorbell_base = (volatile uint32_t *)&pctrlr->regs->doorbell[0].sq_tdbl;
++
++	/* IO-Uncore Mode 2B: opportunistically map the on-die uncore's hint
++	 * register at BAR0+0x2000. Activated by env var SPDK_UNCORE_MODE_B=1;
++	 * left NULL (fully dormant, identical to vanilla SPDK behaviour) when
++	 * the env var is unset or the BAR is too small to cover the offset. */
++	pctrlr->uncore_hint_reg = NULL;
++	{
++		const char *env = getenv("SPDK_UNCORE_MODE_B");
++		if (env != NULL && atoi(env) != 0) {
++			if (size >= 0x2004) {
++				pctrlr->uncore_hint_reg = (volatile uint32_t *)
++					((uint8_t *)addr + 0x2000);
++				NVME_CTRLR_NOTICELOG(&pctrlr->ctrlr,
++					"IO-Uncore Mode 2B: hint register mapped at BAR0+0x2000\n");
++			} else {
++				NVME_CTRLR_WARNLOG(&pctrlr->ctrlr,
++					"IO-Uncore Mode 2B requested but BAR0 size %" PRIu64
++					" is too small for offset 0x2000; disabling\n", size);
++			}
++		}
++	}
++
+ 	nvme_pcie_ctrlr_map_cmb(pctrlr);
+ 	nvme_pcie_ctrlr_map_pmr(pctrlr);
+ 
+diff --git a/spdk/lib/nvme/nvme_pcie_common.c b/spdk/lib/nvme/nvme_pcie_common.c
+index 5751b4c6..206193a9 100644
+--- a/spdk/lib/nvme/nvme_pcie_common.c
++++ b/spdk/lib/nvme/nvme_pcie_common.c
+@@ -765,19 +765,68 @@ nvme_pcie_qpair_complete_tracker(struct spdk_nvme_qpair *qpair, struct nvme_trac
+ 		if (req->t_completion == 0) {
+ 			req->t_completion = req->t_cqe_seen ? req->t_cqe_seen : nvme_io_cycle_rdtsc();
+ 		}
+-		/* Measure completion logic up to (but not including) callback execution. */
++		/* t_end excludes the application callback so cycles/IO accounting
++		 * does not credit the IO-Uncore for application work it cannot
++		 * perform. The split probes below measure the callback separately
++		 * for the State_Dealloc decomposition reported in the paper. */
+ 		req->t_end = req->t_dealloc_pre_end;
+ 
+ 		/* Only check admin requests from different processes. */
+ 		if (nvme_qpair_is_admin_queue(qpair) && req->pid != getpid()) {
+ 			nvme_pcie_qpair_insert_pending_admin_request(qpair, req, cpl);
++			req->t_callback_start = req->t_dealloc_pre_end;
++			req->t_callback_end   = req->t_dealloc_pre_end;
+ 		} else {
+-			nvme_complete_request(tr->cb_fn, tr->cb_arg, qpair, req, cpl);
++			/* Inlined nvme_complete_request() so we can stamp probes
++			 * around cb_fn(). Semantics mirror nvme_internal.h:
++			 *   1. accel-sequence cleanup on error path
++			 *   2. error injection at completion path
++			 *   3. _nvme_free_request before invoking the callback
++			 *   4. invoke cb_fn
++			 * Only step 4 is application work; 1-3 are SPDK library
++			 * teardown that the IO-Uncore can elide. */
++			struct spdk_nvme_cpl    err_cpl;
++			struct nvme_error_cmd  *err_cmd;
++			spdk_nvme_cmd_cb        cb_fn  = tr->cb_fn;
++			void                   *cb_arg = tr->cb_arg;
++
++			if (spdk_unlikely(req->accel_sequence != NULL)) {
++				assert(qpair->poll_group != NULL);
++				struct spdk_nvme_poll_group *pg = qpair->poll_group->group;
++				assert(spdk_nvme_cpl_is_error(cpl));
++				pg->accel_fn_table.abort_sequence(req->accel_sequence);
++				req->accel_sequence = NULL;
++			}
++
++			if (spdk_unlikely(!TAILQ_EMPTY(&qpair->err_cmd_head) &&
++					  !spdk_nvme_cpl_is_error(cpl))) {
++				TAILQ_FOREACH(err_cmd, &qpair->err_cmd_head, link) {
++					if (err_cmd->do_not_submit) {
++						continue;
++					}
++					if ((err_cmd->opc == req->cmd.opc) && err_cmd->err_count) {
++						err_cpl = *cpl;
++						err_cpl.status.sct = err_cmd->status.sct;
++						err_cpl.status.sc  = err_cmd->status.sc;
++						cpl = &err_cpl;
++						err_cmd->err_count--;
++						break;
++					}
++				}
++			}
++
++			_nvme_free_request(req, qpair);
++			req->t_callback_start = nvme_io_cycle_rdtsc();
++			if (spdk_likely(cb_fn)) {
++				cb_fn(cb_arg, cpl);
++			}
++			req->t_callback_end = nvme_io_cycle_rdtsc();
+ 		}
+ 
+ 		tr->req = NULL;
+ 
+ 		TAILQ_INSERT_HEAD(&pqpair->free_tr, tr, tq_list);
++		req->t_dealloc_post_end = nvme_io_cycle_rdtsc();
+ 	}
+ }
+ 
+@@ -910,6 +959,21 @@ nvme_pcie_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
+ 		return -ENXIO;
+ 	}
+ 
++	/* IO-Uncore Mode 2B (poll-lite) early exit. When the on-die uncore
++	 * publishes hint=0, no I/O CQEs are queued in the lCQFIFO, so the
++	 * DRAM CQ phase-bit scan would only churn cachelines for nothing.
++	 * Skip on I/O qpairs (qid != 0); admin queue always polls to avoid
++	 * starving controller commands. Dormant when uncore_hint_reg is NULL. */
++	{
++		struct nvme_pcie_ctrlr *pctrlr =
++			nvme_pcie_ctrlr(qpair->ctrlr);
++		if (spdk_likely(pctrlr->uncore_hint_reg != NULL) &&
++		    spdk_likely(qpair->id != 0) &&
++		    *pctrlr->uncore_hint_reg == 0) {
++			return 0;
++		}
++	}
++
+ 	poll_start = nvme_io_cycle_rdtsc();
+ 
+ 	if (spdk_unlikely(nvme_qpair_get_state(qpair) == NVME_QPAIR_CONNECTING)) {
+diff --git a/spdk/lib/nvme/nvme_pcie_internal.h b/spdk/lib/nvme/nvme_pcie_internal.h
+index 1c9ae523..b6c1d54a 100644
+--- a/spdk/lib/nvme/nvme_pcie_internal.h
++++ b/spdk/lib/nvme/nvme_pcie_internal.h
+@@ -75,6 +75,14 @@ struct nvme_pcie_ctrlr {
+ 	bool is_remapped;
+ 
+ 	volatile uint32_t *doorbell_base;
++
++	/* IO-Uncore Mode 2B (poll-lite) host hint register mapped at BAR0+0x2000.
++	 * Set in nvme_pcie_ctrlr_allocate_bars() iff env SPDK_UNCORE_MODE_B=1
++	 * AND the mapped BAR0 covers the offset; NULL otherwise. When non-NULL
++	 * and reading 0, the polling fast path returns immediately, eliminating
++	 * the DRAM CQ phase-bit scan. Reads are uncached and load-acquire-safe
++	 * on x86 for aligned 4-byte access. */
++	volatile uint32_t *uncore_hint_reg;
+ };
+ 
+ extern __thread struct nvme_pcie_ctrlr *g_thread_mmio_ctrlr;
+diff --git a/spdk/lib/nvme/nvme_qpair.c b/spdk/lib/nvme/nvme_qpair.c
+index 3e99ae57..d453110b 100644
+--- a/spdk/lib/nvme/nvme_qpair.c
++++ b/spdk/lib/nvme/nvme_qpair.c
+@@ -41,6 +41,9 @@ struct io_cycle_breakdown {
+ 	uint64_t	t_cqe_valid_end;
+ 	uint64_t	t_tr_lookup_end;
+ 	uint64_t	t_dealloc_pre_end;
++	uint64_t	t_callback_start;
++	uint64_t	t_callback_end;
++	uint64_t	t_dealloc_post_end;
+ };
+ 
+ static struct io_cycle_breakdown g_io_cycle_buf[NVME_IO_CYCLE_BUF_SIZE];
+@@ -95,7 +98,8 @@ nvme_io_cycle_dump(void)
+ 
+ 	fprintf(fp, "cid,qid,t_start,t_sqe_copy,t_doorbell,t_completion,t_end,t_poll_cycles,"
+ 		"submit_ns,completion_ns,submit_preamble_ns,tracker_alloc_ns,addr_xlate_ns,cmd_construct_ns,fence_ns,doorbell_ns,"
+-		"cqe_detect_ns,tracker_lookup_ns,state_dealloc_ns\n");
++		"cqe_detect_ns,tracker_lookup_ns,state_dealloc_ns,"
++		"state_dealloc_library_ns,state_dealloc_callback_ns,state_dealloc_total_ns\n");
+ 
+ 	for (i = 0; i < count; i++) {
+ 		uint64_t idx = (start + i) % NVME_IO_CYCLE_BUF_SIZE;
+@@ -113,7 +117,16 @@ nvme_io_cycle_dump(void)
+ 		uint64_t db = (e->t_db_end > e->t_fence_end) ? (e->t_db_end - e->t_fence_end) : 0;
+ 		uint64_t cqe = (e->t_cqe_valid_end > e->t_cqe_seen) ? (e->t_cqe_valid_end - e->t_cqe_seen) : 0;
+ 		uint64_t tr_lookup = (e->t_tr_lookup_end > e->t_cqe_valid_end) ? (e->t_tr_lookup_end - e->t_cqe_valid_end) : 0;
++		/* Legacy column: pre-callback library work only (matches CSVs from
++		 * before the State_Dealloc split). Kept for backward compatibility. */
+ 		uint64_t dealloc_pre = (e->t_dealloc_pre_end > e->t_tr_lookup_end) ? (e->t_dealloc_pre_end - e->t_tr_lookup_end) : 0;
++		/* Split decomposition. The IO-Uncore can elide the library portion
++		 * but cannot eliminate the application callback. */
++		uint64_t cb_lib_pre  = (e->t_callback_start > e->t_dealloc_pre_end) ? (e->t_callback_start - e->t_dealloc_pre_end) : 0;
++		uint64_t cb_only     = (e->t_callback_end > e->t_callback_start) ? (e->t_callback_end - e->t_callback_start) : 0;
++		uint64_t cb_lib_post = (e->t_dealloc_post_end > e->t_callback_end) ? (e->t_dealloc_post_end - e->t_callback_end) : 0;
++		uint64_t dealloc_lib = dealloc_pre + cb_lib_pre + cb_lib_post;
++		uint64_t dealloc_total = dealloc_lib + cb_only;
+ 
+ 		fprintf(fp, "%"PRIu16",%"PRIu16",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",",
+ 			e->cid, e->qid, e->t_start, e->t_sqe_copy, e->t_doorbell, e->t_completion, e->t_end, e->t_poll_cycles);
+@@ -122,8 +135,10 @@ nvme_io_cycle_dump(void)
+ 		fprintf(fp, "%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",",
+ 			_nvme_ticks_to_ns(preamble), _nvme_ticks_to_ns(tr_alloc), _nvme_ticks_to_ns(xlate),
+ 			_nvme_ticks_to_ns(cmd), _nvme_ticks_to_ns(fence), _nvme_ticks_to_ns(db));
+-		fprintf(fp, "%"PRIu64",%"PRIu64",%"PRIu64"\n",
++		fprintf(fp, "%"PRIu64",%"PRIu64",%"PRIu64",",
+ 			_nvme_ticks_to_ns(cqe), _nvme_ticks_to_ns(tr_lookup), _nvme_ticks_to_ns(dealloc_pre));
++		fprintf(fp, "%"PRIu64",%"PRIu64",%"PRIu64"\n",
++			_nvme_ticks_to_ns(dealloc_lib), _nvme_ticks_to_ns(cb_only), _nvme_ticks_to_ns(dealloc_total));
+ 	}
+ 
+ 	fclose(fp);
+@@ -208,6 +223,9 @@ nvme_io_cycle_record(struct nvme_request *req)
+ 	e->t_cqe_valid_end = req->t_cqe_valid_end;
+ 	e->t_tr_lookup_end = req->t_tr_lookup_end;
+ 	e->t_dealloc_pre_end = req->t_dealloc_pre_end;
++	e->t_callback_start = req->t_callback_start;
++	e->t_callback_end = req->t_callback_end;
++	e->t_dealloc_post_end = req->t_dealloc_post_end;
+ 
+ 	__atomic_fetch_add(&g_io_cycle_count, 1, __ATOMIC_RELAXED);
+ 

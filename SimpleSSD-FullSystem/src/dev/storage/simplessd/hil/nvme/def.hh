@@ -100,7 +100,15 @@ typedef enum {
   REG_ADMIN_CQUEUE_BASE_ADDR = 0x30,
   REG_CMB_LOCATION = 0x38,
   REG_CMB_SIZE = 0x3C,
-  REG_DOORBELL_BEGIN = 0x1000
+  REG_DOORBELL_BEGIN = 0x1000,
+  //! One past the last byte of the doorbell window. The NVMe spec puts
+  //! doorbells at REG_DOORBELL_BEGIN + (2*qid+isCQ)*dstrd. For dstrd = 4
+  //! and up to 512 queue pairs that occupies [0x1000, 0x2000). Offsets
+  //! at or above REG_DOORBELL_END are NOT doorbells — they must fall
+  //! through to writeRegister/readRegister so the I/O-Uncore hint
+  //! register (0x2000) and the Mode 2 mailbox region (0x3000+) reach
+  //! the controller correctly.
+  REG_DOORBELL_END   = 0x2000
 } COMMAND_REGISTER;
 
 typedef enum { ROUND_ROBIN, WEIGHTED_ROUND_ROBIN } ARBITRATION_METHOD;

@@ -50,6 +50,22 @@ const char NAME_UNCORE_MODE[]       = "UncoreMode";
 const char NAME_UNCORE_CQ_BATCH_N[] = "CQBatchN";
 const char NAME_UNCORE_CQ_BATCH_T[] = "CQBatchT";
 const char NAME_UNCORE_DB_BATCH_B[] = "DBBatchB";
+// Mode 2 deep-offload Mailbox SQ Engine
+const char NAME_MAILBOX_BASE[]          = "MailboxBase";
+const char NAME_MAILBOX_STRIDE[]        = "MailboxStride";
+const char NAME_MAILBOX_LATCH_CYCLES[]  = "MailboxLatchCycles";
+const char NAME_MAILBOX_DECODE_CYCLES[] = "MailboxDecodeCycles";
+const char NAME_MAILBOX_INJECT_CYCLES[] = "MailboxInjectCycles";
+// Mechanism #1/#2/#4 (CQ-side deep offload)
+const char NAME_FREE_CID_BASE[]            = "FreeCIDBase";
+const char NAME_FREE_CID_LATENCY_CYCLES[]  = "FreeCIDLatencyCycles";
+const char NAME_HINT_AGE_GRANULARITY_PS[]  = "HintAgeGranularityPs";
+
+const char NAME_FASTPATH_ENABLED[]        = "FastPathEnabled";
+const char NAME_FASTPATH_LMIN[]           = "FastPathLmin";
+const char NAME_FASTPATH_TMAX_PER_CH[]    = "FastPathTmaxPerChannel";
+const char NAME_FASTPATH_CHANNEL_POLICY[] = "FastPathChannelPolicy";
+const char NAME_FASTPATH_MAX_OUTSTANDING[]= "FastPathMaxOutstanding";
 
 Config::Config() {
   pcieGen = PCIExpress::PCIE_3_X;
@@ -73,6 +89,24 @@ Config::Config() {
   uncoreCQBatchN = 8;
   uncoreCQBatchT = 4000000;  // 4 µs in picoseconds
   uncoreDBBatchB = 4;
+  // Mode 2 Mailbox SQ Engine defaults
+  // (matches RTL spec §4 SQ-Engine FSM @ 1 GHz: 3 latch + 8 decode + 4 inject)
+  mailboxBase          = 0x3000;
+  mailboxStride        = 0x20;
+  mailboxLatchCycles   = 1;
+  mailboxDecodeCycles  = 8;
+  mailboxInjectCycles  = 4;
+  // Mechanism #1/#2/#4 defaults
+  freeCidBase           = 0x3400;
+  freeCidLatencyCycles  = 2;
+  hintAgeGranularityPs  = 1024000ULL;  // 1 µs per age unit
+
+  // Fast-path defaults (disabled unless cfg sets FastPathEnabled = 1)
+  fastPathEnabled        = false;
+  fastPathLmin           = 3000000;  // 3 µs in ps
+  fastPathTmaxPerCh      = 1000000;  // 1 M IOPS / channel
+  fastPathChannelPolicy  = 1;        // LBA-hash
+  fastPathMaxOutstanding = 8192;
 }
 
 bool Config::setConfig(const char *name, const char *value) {
@@ -88,6 +122,12 @@ bool Config::setConfig(const char *name, const char *value) {
         break;
       case 2:
         pcieGen = PCIExpress::PCIE_3_X;
+        break;
+      case 3:
+        pcieGen = PCIExpress::PCIE_4_X;
+        break;
+      case 4:
+        pcieGen = PCIExpress::PCIE_5_X;
         break;
       default:
         panic("Invalid PCI Express Generation");
@@ -198,6 +238,69 @@ bool Config::setConfig(const char *name, const char *value) {
       panic("DBBatchB must be >= 1");
     }
   }
+  else if (MATCH_NAME(NAME_MAILBOX_BASE)) {
+    uint32_t v = (uint32_t)strtoul(value, nullptr, 0);
+    if (v < 0x2004 || v > 0xF000 || (v & 0x1F) != 0) {
+      panic("MailboxBase must be 0x2004..0xF000 and 32-byte aligned");
+    }
+    mailboxBase = v;
+  }
+  else if (MATCH_NAME(NAME_MAILBOX_STRIDE)) {
+    uint32_t v = (uint32_t)strtoul(value, nullptr, 0);
+    if (v < 0x20 || (v & 0x1F) != 0) {
+      panic("MailboxStride must be >= 0x20 and 32-byte aligned");
+    }
+    mailboxStride = v;
+  }
+  else if (MATCH_NAME(NAME_MAILBOX_LATCH_CYCLES)) {
+    mailboxLatchCycles = (uint16_t)strtoul(value, nullptr, 0);
+  }
+  else if (MATCH_NAME(NAME_MAILBOX_DECODE_CYCLES)) {
+    mailboxDecodeCycles = (uint16_t)strtoul(value, nullptr, 0);
+  }
+  else if (MATCH_NAME(NAME_MAILBOX_INJECT_CYCLES)) {
+    mailboxInjectCycles = (uint16_t)strtoul(value, nullptr, 0);
+  }
+  else if (MATCH_NAME(NAME_FREE_CID_BASE)) {
+    uint32_t v = (uint32_t)strtoul(value, nullptr, 0);
+    if (v < 0x2004 || v > 0xF000 || (v & 0x3) != 0) {
+      panic("FreeCIDBase must be 0x2004..0xF000 and 4-byte aligned");
+    }
+    freeCidBase = v;
+  }
+  else if (MATCH_NAME(NAME_FREE_CID_LATENCY_CYCLES)) {
+    freeCidLatencyCycles = (uint16_t)strtoul(value, nullptr, 0);
+  }
+  else if (MATCH_NAME(NAME_HINT_AGE_GRANULARITY_PS)) {
+    hintAgeGranularityPs = strtoull(value, nullptr, 0);
+    if (hintAgeGranularityPs == 0) {
+      panic("HintAgeGranularityPs must be > 0");
+    }
+  }
+  else if (MATCH_NAME(NAME_FASTPATH_ENABLED)) {
+    fastPathEnabled = (strtoul(value, nullptr, 10) != 0);
+  }
+  else if (MATCH_NAME(NAME_FASTPATH_LMIN)) {
+    fastPathLmin = strtoull(value, nullptr, 10);
+    if (fastPathLmin == 0) {
+      panic("FastPathLmin must be > 0 picoseconds");
+    }
+  }
+  else if (MATCH_NAME(NAME_FASTPATH_TMAX_PER_CH)) {
+    fastPathTmaxPerCh = strtoull(value, nullptr, 10);
+    if (fastPathTmaxPerCh == 0) {
+      panic("FastPathTmaxPerChannel must be > 0");
+    }
+  }
+  else if (MATCH_NAME(NAME_FASTPATH_CHANNEL_POLICY)) {
+    fastPathChannelPolicy = (uint32_t)strtoul(value, nullptr, 10);
+    if (fastPathChannelPolicy > 1) {
+      panic("FastPathChannelPolicy must be 0 (RR) or 1 (LBA-hash)");
+    }
+  }
+  else if (MATCH_NAME(NAME_FASTPATH_MAX_OUTSTANDING)) {
+    fastPathMaxOutstanding = strtoull(value, nullptr, 10);
+  }
   else {
     ret = false;
   }
@@ -281,6 +384,42 @@ uint64_t Config::readUint(uint32_t idx) {
     case NVME_UNCORE_DB_BATCH_B:
       ret = uncoreDBBatchB;
       break;
+    case NVME_MAILBOX_BASE:
+      ret = mailboxBase;
+      break;
+    case NVME_MAILBOX_STRIDE:
+      ret = mailboxStride;
+      break;
+    case NVME_MAILBOX_LATCH_CYCLES:
+      ret = mailboxLatchCycles;
+      break;
+    case NVME_MAILBOX_DECODE_CYCLES:
+      ret = mailboxDecodeCycles;
+      break;
+    case NVME_MAILBOX_INJECT_CYCLES:
+      ret = mailboxInjectCycles;
+      break;
+    case NVME_FREE_CID_BASE:
+      ret = freeCidBase;
+      break;
+    case NVME_FREE_CID_LATENCY_CYCLES:
+      ret = freeCidLatencyCycles;
+      break;
+    case NVME_HINT_AGE_GRANULARITY_PS:
+      ret = hintAgeGranularityPs;
+      break;
+    case NVME_FASTPATH_LMIN:
+      ret = fastPathLmin;
+      break;
+    case NVME_FASTPATH_TMAX_PER_CH:
+      ret = fastPathTmaxPerCh;
+      break;
+    case NVME_FASTPATH_CHANNEL_POLICY:
+      ret = fastPathChannelPolicy;
+      break;
+    case NVME_FASTPATH_MAX_OUTSTANDING:
+      ret = fastPathMaxOutstanding;
+      break;
   }
 
   return ret;
@@ -314,6 +453,9 @@ bool Config::readBoolean(uint32_t idx) {
       break;
     case NVME_USE_COW_DISK:
       ret = useCopyOnWriteDisk;
+      break;
+    case NVME_FASTPATH_ENABLED:
+      ret = fastPathEnabled;
       break;
   }
 

@@ -291,11 +291,15 @@ Tick NVMeInterface::read(PacketPtr pkt) {
       addr + size <= registerTableBaseAddress + registerTableSize) {
     int offset = addr - registerTableBaseAddress;
 
-    if (offset >= SimpleSSD::HIL::NVMe::REG_DOORBELL_BEGIN) {
+    if (offset >= SimpleSSD::HIL::NVMe::REG_DOORBELL_BEGIN &&
+        offset <  SimpleSSD::HIL::NVMe::REG_DOORBELL_END) {
       // Read on doorbell register is vendor specific
       memset(buffer, 0, size);
     }
     else {
+      // Standard registers AND I/O-Uncore region above doorbells
+      // (hint reg at 0x2000, mailbox at 0x3000+) all route here so
+      // the controller's readRegister can dispatch by offset.
       pController->readRegister(offset, size, buffer, end);
     }
   }
@@ -333,7 +337,8 @@ Tick NVMeInterface::write(PacketPtr pkt) {
       addr + size <= registerTableBaseAddress + registerTableSize) {
     int offset = addr - registerTableBaseAddress;
 
-    if (offset >= SimpleSSD::HIL::NVMe::REG_DOORBELL_BEGIN) {
+    if (offset >= SimpleSSD::HIL::NVMe::REG_DOORBELL_BEGIN &&
+        offset <  SimpleSSD::HIL::NVMe::REG_DOORBELL_END) {
       const int dstrd = 4;
       uint32_t uiTemp, uiMask;
       uint16_t uiDoorbell;
@@ -356,6 +361,10 @@ Tick NVMeInterface::write(PacketPtr pkt) {
       }
     }
     else {
+      // Standard registers AND I/O-Uncore region above doorbells
+      // (hint reg at 0x2000 read-only, mailbox region at 0x3000+ for
+      // Mode 2 deep-offload submissions) all route here so the
+      // controller's writeRegister can dispatch by offset.
       pController->writeRegister(offset, size, buffer, end);
     }
   }

@@ -26,6 +26,7 @@
 #include "hil/nvme/interface.hh"
 #include "hil/nvme/ocssd.hh"
 #include "hil/nvme/subsystem.hh"
+#include "pal/config.hh"
 #include "util/algorithm.hh"
 #include "util/fifo.hh"
 #include "util/interface.hh"
@@ -128,6 +129,27 @@ Controller::Controller(Interface *intrface, ConfigReader &c)
   uncoreCfg.cqBatchT = conf.readUint(CONFIG_NVME, NVME_UNCORE_CQ_BATCH_T);
   uncoreCfg.dbBatchB = (uint32_t)conf.readUint(CONFIG_NVME, NVME_UNCORE_DB_BATCH_B);
 
+  // Mode 2 Mailbox SQ Engine knobs (defaults applied in Config ctor; cfg-file
+  // values override them).
+  uncoreCfg.mailboxBase          =
+      (uint32_t)conf.readUint(CONFIG_NVME, NVME_MAILBOX_BASE);
+  uncoreCfg.mailboxStride        =
+      (uint32_t)conf.readUint(CONFIG_NVME, NVME_MAILBOX_STRIDE);
+  uncoreCfg.mailboxLatchCycles   =
+      (uint16_t)conf.readUint(CONFIG_NVME, NVME_MAILBOX_LATCH_CYCLES);
+  uncoreCfg.mailboxDecodeCycles  =
+      (uint16_t)conf.readUint(CONFIG_NVME, NVME_MAILBOX_DECODE_CYCLES);
+  uncoreCfg.mailboxInjectCycles  =
+      (uint16_t)conf.readUint(CONFIG_NVME, NVME_MAILBOX_INJECT_CYCLES);
+
+  // Mechanism #1 / #2 / #4 knobs
+  uncoreCfg.freeCidBase          =
+      (uint32_t)conf.readUint(CONFIG_NVME, NVME_FREE_CID_BASE);
+  uncoreCfg.freeCidLatencyCycles =
+      (uint16_t)conf.readUint(CONFIG_NVME, NVME_FREE_CID_LATENCY_CYCLES);
+  uncoreCfg.hintAgeGranularityPs =
+      conf.readUint(CONFIG_NVME, NVME_HINT_AGE_GRANULARITY_PS);
+
   uncoreHintReady      = 0;
   uncoreFlushScheduled = false;
   uncorePendingCQE.clear();
@@ -135,10 +157,87 @@ Controller::Controller(Interface *intrface, ConfigReader &c)
 
   uncoreFlushEvent = allocate([this](uint64_t) { uncoreFlushCQBuffer(false); });
 
+  // Mode 2 per-qid mailbox latches; sized to cqsize so qid index never escapes.
+  mailboxLatches.assign(cqsize, MailboxLatch());
+
+  // Mechanism #1: per-qid free-CID rings, primed with [0..QueueDepth-1].
+  // QueueDepth comes from CAP.MQES+1 (cfgdata.maxQueueEntry). Admin (qid 0)
+  // gets a small fixed depth since it doesn't use the Mode B path.
+  freeCidRings.assign(cqsize, FreeCIDRing{});
+  for (uint16_t qid = 0; qid < (uint16_t)cqsize; qid++) {
+    FreeCIDRing &r = freeCidRings[qid];
+    uint32_t depth = (qid == 0) ? 64 : (uint32_t)cfgdata.maxQueueEntry;
+    if (depth == 0) depth = 64;  // safety
+    r.ring.assign(depth, 0);
+    for (uint32_t i = 0; i < depth; i++) {
+      r.ring[i] = (uint16_t)i;
+    }
+    r.head = 0;
+    r.tail = 0;
+    r.depth = depth;     // full ring at init
+    r.inflight = 0;
+  }
+  hintOldestArrivalTicks = 0;
+
+  // Mode 2 inject event: scan all qids and inject any that have nextWord==3.
+  // Only one qid is typically ready when this fires (the one that just landed
+  // its 3rd word), but the loop is cheap and safe for concurrent landings.
+  mailboxInjectEvent = allocate([this](uint64_t t) {
+    for (uint16_t qid = 1; qid < (uint16_t)mailboxLatches.size(); qid++) {
+      if (mailboxLatches[qid].nextWord == 3) {
+        mailboxInject(qid, t);
+      }
+    }
+  });
+
   debugprint(LOG_HIL_NVME,
              "UNCORE  | mode=%u cqBatchN=%u cqBatchT=%" PRIu64 " dbBatchB=%u",
              (uint32_t)uncoreCfg.mode, uncoreCfg.cqBatchN,
              uncoreCfg.cqBatchT, uncoreCfg.dbBatchB);
+  if (uncoreCfg.mode == UNCORE_MODE_B) {
+    debugprint(LOG_HIL_NVME,
+               "MAILBOX | base=0x%X stride=0x%X latch=%u decode=%u inject=%u",
+               uncoreCfg.mailboxBase, uncoreCfg.mailboxStride,
+               (unsigned)uncoreCfg.mailboxLatchCycles,
+               (unsigned)uncoreCfg.mailboxDecodeCycles,
+               (unsigned)uncoreCfg.mailboxInjectCycles);
+  }
+
+  // --- Fast-path statistical timing model initialization ---
+  // (NVMeVirt-style; cited as methodology in fast_ssd_highiops.cfg header.)
+  fastPathCfg.enabled        = conf.readBoolean(CONFIG_NVME, NVME_FASTPATH_ENABLED);
+  fastPathCfg.lminPs         = conf.readUint(CONFIG_NVME, NVME_FASTPATH_LMIN);
+  fastPathCfg.tmaxPerCh      = conf.readUint(CONFIG_NVME, NVME_FASTPATH_TMAX_PER_CH);
+  fastPathCfg.channelPolicy  =
+      (uint32_t)conf.readUint(CONFIG_NVME, NVME_FASTPATH_CHANNEL_POLICY);
+  fastPathCfg.maxOutstanding =
+      conf.readUint(CONFIG_NVME, NVME_FASTPATH_MAX_OUTSTANDING);
+  // Channel count sourced from [pal] section so fast-path inherits NAND
+  // parallelism without a redundant cfg knob.
+  fastPathCfg.channels =
+      (uint16_t)conf.readUint(CONFIG_PAL, PAL::PAL_CHANNEL);
+  if (fastPathCfg.channels == 0) {
+    fastPathCfg.channels = 1;  // safety: never zero-divide
+  }
+  // Inter-dispatch spacing per channel (picoseconds per IO).
+  if (fastPathCfg.tmaxPerCh > 0) {
+    fastPathCfg.spacingPs = 1000000000000ULL / fastPathCfg.tmaxPerCh;
+  }
+  fastPathChannelNextFree.assign(fastPathCfg.channels, 0);
+  fastPathRRCounter = 0;
+  fastPathFireScheduled = false;
+  fastPathFireEvent = allocate([this](uint64_t) {
+    fastPathFireScheduled = false;
+    fastPathFire();
+  });
+  if (fastPathCfg.enabled) {
+    debugprint(LOG_HIL_NVME,
+               "FASTPATH | enabled Lmin=%" PRIu64 "ps Tmax=%" PRIu64
+               " ch=%u policy=%u maxOutstanding=%" PRIu64,
+               fastPathCfg.lminPs, fastPathCfg.tmaxPerCh,
+               fastPathCfg.channels, fastPathCfg.channelPolicy,
+               fastPathCfg.maxOutstanding);
+  }
 
   // Which subsystem should we use
   uint16_t vid, ssvid;
@@ -196,6 +295,75 @@ Controller::~Controller() {
 
 void Controller::readRegister(uint64_t offset, uint64_t size, uint8_t *buffer,
                               uint64_t &) {
+  // I/O-Uncore region above the doorbell window.  These offsets sit OUTSIDE
+  // the 64-byte registers.data union, so we MUST handle them before the
+  // generic memcpy below or we'd read out-of-bounds memory.
+  //
+  // Mode B typed hint register (Mechanism #4): 4-byte read-only at
+  // BAR0 + UNCORE_HINT_REG_OFFSET.  Layout: bits[15:0] = pending count;
+  // bits[31:16] = oldest-CQE age in HintAgeGranularityPs units.  Reads
+  // when the controller is in Mode 0 or 1 return a sticky zero.
+  if (offset == UNCORE_HINT_REG_OFFSET) {
+    uint32_t v = getMultiBitHint();
+    uncoreStats.hintTypedReads++;
+    if (size > 4) size = 4;
+    memset(buffer, 0, size);
+    memcpy(buffer, &v, size);
+    debugprint(LOG_HIL_NVME,
+               "BAR0    | READ  | UNCORE_HINT_TYPED count=%u age=%u",
+               (unsigned)(v & 0xFFFFu), (unsigned)(v >> 16));
+    return;
+  }
+  // Mechanism #1: free-CID ring read endpoints.
+  //   BAR0 + freeCidBase + (qid * 4) -> uint32_t containing CID in low
+  //   16 bits, 0xFFFF if ring is empty.  Side-effect: pops the FIFO and
+  //   increments inflight counter for that qid.
+  if (uncoreCfg.mode != UNCORE_MODE_DISABLED) {
+    uint64_t fc_base = uncoreCfg.freeCidBase;
+    uint64_t fc_end  = fc_base + (uint64_t)cqsize * 4ULL;
+    if (offset >= fc_base && offset < fc_end) {
+      uint16_t qid = (uint16_t)((offset - fc_base) / 4ULL);
+      uint16_t cid = freeCidReadNext(qid);
+      uint32_t v   = (uint32_t)cid;
+      if (size > 4) size = 4;
+      memset(buffer, 0, size);
+      memcpy(buffer, &v, size);
+      debugprint(LOG_HIL_NVME,
+                 "BAR0    | READ  | FREE_CID qid=%u -> cid=0x%04X",
+                 (unsigned)qid, (unsigned)cid);
+      return;
+    }
+    // Mechanism #2: queue-depth counter read endpoints.
+    //   BAR0 + freeCidBase + 0x400 + (qid * 4) -> uint32_t inflight count.
+    //   Pure read, no side effect.
+    uint64_t qd_base = uncoreCfg.freeCidBase + 0x400ULL;
+    uint64_t qd_end  = qd_base + (uint64_t)cqsize * 4ULL;
+    if (offset >= qd_base && offset < qd_end) {
+      uint16_t qid = (uint16_t)((offset - qd_base) / 4ULL);
+      uint32_t v   = getInflightCount(qid);
+      uncoreStats.qdepthReads++;
+      if (size > 4) size = 4;
+      memset(buffer, 0, size);
+      memcpy(buffer, &v, size);
+      debugprint(LOG_HIL_NVME,
+                 "BAR0    | READ  | QDEPTH qid=%u -> %u",
+                 (unsigned)qid, (unsigned)v);
+      return;
+    }
+  }
+  // Mailbox region [MailboxBase, MailboxBase + cqsize*MailboxStride): the
+  // mailbox is write-only from the host's perspective in Mode 2.  Reads
+  // here return 0 to keep buggy host probes silent.
+  if (uncoreCfg.mode != UNCORE_MODE_DISABLED) {
+    uint64_t mb_base = uncoreCfg.mailboxBase;
+    uint64_t mb_end  =
+        mb_base + (uint64_t)cqsize * (uint64_t)uncoreCfg.mailboxStride;
+    if (offset >= mb_base && offset < mb_end) {
+      memset(buffer, 0, size);
+      return;
+    }
+  }
+
   registers.interruptMaskSet = interruptMask;
   registers.interruptMaskClear = interruptMask;
 
@@ -417,6 +585,36 @@ void Controller::writeRegister(uint64_t offset, uint64_t size, uint8_t *buffer,
   else if (size == 8) {
     memcpy(&uiTemp64, buffer, 8);
 
+    // Mode 2 deep-offload: 8-byte writes to the mailbox region are absorbed
+    // here BEFORE the standard register switch.  Region:
+    //   [MailboxBase, MailboxBase + cqsize * MailboxStride)
+    // Per-qid slot occupies MailboxStride bytes; only offsets +0/+8/+16 are
+    // valid (the three compact-SQE words).  All other offsets in the region
+    // are ignored (treated as harmless dead-region writes).
+    if (uncoreCfg.mode == UNCORE_MODE_B) {
+      uint64_t mb_base = uncoreCfg.mailboxBase;
+      uint64_t mb_end  =
+          mb_base + (uint64_t)cqsize * (uint64_t)uncoreCfg.mailboxStride;
+      if (offset >= mb_base && offset < mb_end) {
+        uint64_t rel = offset - mb_base;
+        uint16_t qid = (uint16_t)(rel / uncoreCfg.mailboxStride);
+        uint64_t off = rel % uncoreCfg.mailboxStride;
+        if (off == 0 || off == 8 || off == 16) {
+          uint8_t wordIdx = (uint8_t)(off / 8);
+          handleMailboxWrite(qid, wordIdx, uiTemp64, getTick());
+          debugprint(LOG_HIL_NVME,
+                     "BAR0    | WRITE | MAILBOX qid=%u word=%u val=%016" PRIX64,
+                     (unsigned)qid, (unsigned)wordIdx, uiTemp64);
+          return;
+        }
+        // Else: write to a reserved byte in the slot; silently ignore.
+        debugprint(LOG_HIL_NVME,
+                   "BAR0    | WRITE | MAILBOX reserved qid=%u off=0x%" PRIX64
+                   " (ignored)", (unsigned)qid, off);
+        return;
+      }
+    }
+
     switch (offset) {
       case REG_ADMIN_CQUEUE_BASE_ADDR:
         debugprint(LOG_HIL_NVME,
@@ -571,6 +769,38 @@ int Controller::createSQueue(uint16_t sqid, uint16_t cqid, uint16_t size,
       ppSQueue[sqid]->setBase(
           new PRPList(cfgdata, cpuHandler, pContext, prp1, size * sqstride, pc),
           sqstride);
+
+      // Mechanism #1: re-prime the per-sqid free-CID ring to match the
+      // host's tracker array exactly, NOT the raw SQ depth.  SPDK sizes
+      // pqpair->tr[] = num_entries - max_completions_cap, where
+      //   max_completions_cap = clamp(num_entries / 4, MIN=1, MAX=128).
+      // The controller must hand out CIDs only in [0, num_trackers), or
+      // the host indexes tr[cid] out-of-bounds and segfaults.  We embed
+      // SPDK's exact formula here so the ring and tr[] stay in sync.
+      // (See spdk/lib/nvme/nvme_pcie_common.c:168-172 for the host side.)
+      if (sqid != 0 && sqid < freeCidRings.size()) {
+        FreeCIDRing &r = freeCidRings[sqid];
+        uint32_t num_entries        = (uint32_t)size;
+        uint32_t max_completions    = num_entries / 4;
+        if (max_completions < 1)   max_completions = 1;
+        if (max_completions > 128) max_completions = 128;
+        uint32_t depth = (num_entries > max_completions)
+                             ? (num_entries - max_completions)
+                             : num_entries;
+        r.ring.assign(depth, 0);
+        for (uint32_t i = 0; i < depth; i++) {
+          r.ring[i] = (uint16_t)i;
+        }
+        r.head = 0;
+        r.tail = 0;
+        r.depth = depth;
+        r.inflight = 0;
+        fprintf(stderr,
+                "[DBG_SQ_CREATE] sqid=%u cqid=%u size=%u max_completions=%u "
+                "num_trackers=%u\n",
+                (unsigned)sqid, (unsigned)cqid, (unsigned)size,
+                (unsigned)max_completions, (unsigned)depth);
+      }
 
       ret = 0;
 
@@ -1629,6 +1859,13 @@ void Controller::work() {
       // and re-triggers shutdown when it writes CC back.
       registers.configuration &= ~0x0000C000u;
 
+      // Also clear CC.EN. SPDK's exit path leaves EN=1 after SHN-shutdown;
+      // a subsequent spdk_nvme_perf would then read CC.EN=1 and enter
+      // DISABLE_WAIT_FOR_READY_1 polling CSTS.RDY for 1, which never
+      // re-arms (RDY only transitions on a CC.EN 0->1 edge). Clearing EN
+      // here makes the state consistent with shutdown-complete.
+      registers.configuration &= ~0x00000001u;
+
       shutdownReserved = false;
 
       // I/O Uncore: force-drain any staged CQEs before clearing the SQ FIFO.
@@ -1664,21 +1901,39 @@ void Controller::handleRequest(uint64_t now) {
     SQEntryWrapper *front = new SQEntryWrapper(lSQFIFO.front());
     lSQFIFO.pop_front();
 
-    // Process command
-    DMAFunction doSubmit = [this](uint64_t, void *context) {
-      SQEntryWrapper *req = (SQEntryWrapper *)context;
+    // Admin commands (sqID==0) MUST go through the real subsystem so that
+    // queue creation, identify, set-features, etc. actually execute.
+    // Only I/O commands (sqID != 0) take the fast path.
+    bool useFastPath = fastPathCfg.enabled && front->sqID != 0;
 
-      pSubsystem->submitCommand(
-          *req, [this](CQEntryWrapper &response) { submit(response); });
-
-      delete req;
-    };
-
-    if (bUseOCSSD) {
-      execute(CPU::NVME__OCSSD, CPU::SUBMIT_COMMAND, doSubmit, front);
+    if (useFastPath) {
+      // --- Fast-path branch (NVMeVirt-style statistical timing model) ---
+      // Skip the HIL/ICL/FTL/PAL pipeline entirely. Compute target
+      // completion time and queue the response. submit() will be invoked
+      // at target time by fastPathFire(), which preserves the I/O-Uncore
+      // mechanisms (uncorePendingCQE, uncoreFlushScheduled, BAR0+0x2000
+      // hint reg, aggregationMap).
+      fastPathEnqueue(*front);
+      delete front;
     }
     else {
-      execute(CPU::NVME__SUBSYSTEM, CPU::SUBMIT_COMMAND, doSubmit, front);
+      // --- Original SimpleSSD pipeline (cycle-accurate; used for admin
+      // commands always, and for I/O when fast-path is disabled) ---
+      DMAFunction doSubmit = [this](uint64_t, void *context) {
+        SQEntryWrapper *req = (SQEntryWrapper *)context;
+
+        pSubsystem->submitCommand(
+            *req, [this](CQEntryWrapper &response) { submit(response); });
+
+        delete req;
+      };
+
+      if (bUseOCSSD) {
+        execute(CPU::NVME__OCSSD, CPU::SUBMIT_COMMAND, doSubmit, front);
+      }
+      else {
+        execute(CPU::NVME__SUBSYSTEM, CPU::SUBMIT_COMMAND, doSubmit, front);
+      }
     }
   }
 
@@ -1732,6 +1987,126 @@ bool Controller::checkQueue(SQueue *pQueue, DMAFunction &func, void *context) {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Fast-path statistical timing model (NVMeVirt-style)
+//
+// Skips the HIL/ICL/FTL/PAL pipeline. Each I/O is mapped to a NAND channel
+// (round-robin or LBA-hash) and assigned a target_completion_time:
+//
+//   target = max(now, channel_next_free[ch]) + Lmin
+//   channel_next_free[ch] = max(now, channel_next_free[ch]) + spacingPs
+//   (where spacingPs = 1e12 / TmaxPerChannel)
+//
+// At target_time, the response is routed through Controller::submit(),
+// which invokes the existing I/O-Uncore code paths (uncorePendingCQE,
+// uncoreFlushScheduled, BAR0+0x2000 hint reg, aggregationMap MSI). The
+// fast-path is therefore transparent to the IO-Uncore evaluation.
+//
+// Citations: NVMeVirt [Kim et al., FAST '23], SwarmIO [KAIST '26],
+// FEMU [Li et al., FAST '18] all use equivalent statistical models.
+// ---------------------------------------------------------------------------
+
+void Controller::fastPathEnqueue(SQEntryWrapper &req) {
+  // Back-pressure: if too many in-flight, drop with a transient error.
+  // (At reasonable maxOutstanding values this should never fire under
+  // realistic host workloads — it's a guardrail against runaway sims.)
+  if (fastPathCfg.maxOutstanding != 0 &&
+      fastPathQueue.size() >= fastPathCfg.maxOutstanding) {
+    fastPathStats_dropped_full++;
+    CQEntryWrapper resp(req);
+    resp.makeStatus(false, false, TYPE_GENERIC_COMMAND_STATUS,
+                    STATUS_INTERNAL_ERROR);
+    submit(resp);
+    return;
+  }
+
+  uint64_t now = getTick();
+
+  // Channel selection.
+  uint16_t ch = 0;
+  if (fastPathCfg.channelPolicy == 0) {
+    // Round-robin.
+    ch = fastPathRRCounter % fastPathCfg.channels;
+    fastPathRRCounter++;
+  }
+  else {
+    // LBA-hash (dword10/11 carry SLBA for NVM read/write).
+    uint64_t lba = (uint64_t)req.entry.dword10 |
+                   ((uint64_t)req.entry.dword11 << 32);
+    ch = (uint16_t)(lba % fastPathCfg.channels);
+  }
+
+  // Per-channel statistical timer.
+  uint64_t earliest_start = now;
+  if (fastPathChannelNextFree[ch] > earliest_start) {
+    earliest_start = fastPathChannelNextFree[ch];
+  }
+  uint64_t target = earliest_start + fastPathCfg.lminPs;
+  fastPathChannelNextFree[ch] = earliest_start + fastPathCfg.spacingPs;
+
+  // Build success CQE — fast-path always returns success (no actual data
+  // transfer; spdk_nvme_perf does not verify content for randread).
+  CQEntryWrapper resp(req);
+  resp.makeStatus(false, false, TYPE_GENERIC_COMMAND_STATUS, STATUS_SUCCESS);
+
+  // Insert into ordered queue (sorted by target_time ascending).
+  auto iter = fastPathQueue.begin();
+  while (iter != fastPathQueue.end() && iter->target_time <= target) {
+    ++iter;
+  }
+  fastPathQueue.emplace(iter, resp, target);
+
+  fastPathStats_dispatched++;
+  {
+    static uint32_t fpe_logged = 0;
+    if (fpe_logged < 30) {
+      fprintf(stderr,
+              "[DBG_FP_ENQ] cqID=%u sq_cid_in=%u resp_cid_out=%u sqID=%u target=%lu\n",
+              (unsigned)resp.cqID,
+              (unsigned)req.entry.dword0.commandID,
+              (unsigned)resp.entry.dword3.commandID,
+              (unsigned)req.sqID,
+              (unsigned long)target);
+      fpe_logged++;
+    }
+  }
+  fastPathRescheduleNext();
+}
+
+void Controller::fastPathFire() {
+  uint64_t now = getTick();
+  while (!fastPathQueue.empty() && fastPathQueue.front().target_time <= now) {
+    CQEntryWrapper response = fastPathQueue.front().entry;
+    fastPathQueue.pop_front();
+    // Route through submit() — this is THE function that fires the
+    // I/O-Uncore mechanisms (uncorePendingCQE staging, uncoreFlushScheduled
+    // arming, BAR0+0x2000 hint reg writes via uncoreFlushCQBuffer,
+    // aggregationMap-driven MSI coalescing). The fast-path is therefore
+    // transparent to Mode 0 / 1 / 2B differentiation.
+    submit(response);
+    fastPathStats_completed++;
+  }
+  fastPathRescheduleNext();
+}
+
+void Controller::fastPathRescheduleNext() {
+  if (fastPathQueue.empty()) {
+    return;
+  }
+  uint64_t next_target = fastPathQueue.front().target_time;
+  uint64_t now = getTick();
+  if (next_target < now) {
+    next_target = now;
+  }
+  if (fastPathFireScheduled) {
+    // Replace any prior schedule. SimpleSSD's reschedule() is the
+    // idempotent way to do this without double-schedule panics.
+    deschedule(fastPathFireEvent);
+  }
+  schedule(fastPathFireEvent, next_target);
+  fastPathFireScheduled = true;
+}
+
 void Controller::submit(CQEntryWrapper &entry) {
   CQueue *pQueue = ppCQueue[entry.cqID];
 
@@ -1746,8 +2121,14 @@ void Controller::submit(CQEntryWrapper &entry) {
   // Non-admin I/O CQEs (cqID != 0) are redirected to the staging buffer when
   // uncore is enabled.  Admin CQEs always fall through to the immediate path.
   if (uncoreCfg.mode != UNCORE_MODE_DISABLED && entry.cqID != 0) {
+    bool wasEmpty = uncorePendingCQE.empty();
     uncorePendingCQE.emplace_back(entry, entry.submitAt);
     uncoreStats.cqesGenerated++;
+    // Mechanism #4: record the arrival tick of the OLDEST pending CQE so
+    // the typed hint register can report staleness in age units.
+    if (wasEmpty) {
+      hintOldestArrivalTicks = getTick();
+    }
 
     if ((uint32_t)uncorePendingCQE.size() >= uncoreCfg.cqBatchN) {
       // Count threshold reached: flush immediately.
@@ -1967,6 +2348,10 @@ void Controller::uncoreFlushCQBuffer(bool isShutdown) {
   }
 
   // Move staged CQEs into lCQFIFO preserving submitAt sort order.
+  // Mechanism #1: simultaneously recycle each CID back into the per-qid
+  // free-CID ring so the host's NEXT submission can reuse it without any
+  // TAILQ work.  Use the CQE's cqID (= qid the CID was issued from) and
+  // the per-entry commandID (= the CID we issued).
   for (auto &pe : uncorePendingCQE) {
     CQEntryWrapper &entry = pe.wrapper;
     auto iter = lCQFIFO.begin();
@@ -1977,8 +2362,11 @@ void Controller::uncoreFlushCQBuffer(bool isShutdown) {
     }
     lCQFIFO.insert(iter, entry);
     uncoreStats.cqesPublished++;
+    freeCidRecycle(entry.cqID, entry.entry.dword3.commandID);
   }
   uncorePendingCQE.clear();
+  // Mechanism #4: no pending CQEs after the flush -> no age to report.
+  hintOldestArrivalTicks = 0;
 
   // Cancel the timeout event if it was previously armed.
   if (uncoreFlushScheduled) {
@@ -1991,6 +2379,254 @@ void Controller::uncoreFlushCQBuffer(bool isShutdown) {
 
   // Hand off to the existing DMA-write + interrupt pipeline.
   reserveCompletion();
+}
+
+// ---------------------------------------------------------------------------
+// I/O Uncore Mode 2 — SQ Engine Mailbox handlers
+//
+// handleMailboxWrite(): S_LATCH_0/1/2.  Each 8-byte MMIO write to the
+//                       mailbox region is one cycle of S_LATCH.  When all
+//                       three words have landed, the inject event is armed
+//                       at tick + (decode + inject) * 1 ns @ 1 GHz.
+//
+// mailboxInject():      S_DECODE + S_INJECT.  Decodes the compact 24-byte
+//                       descriptor into a full SQEntryWrapper, pushes it
+//                       into lSQFIFO, and schedules requestEvent so
+//                       handleRequest() picks it up (either Path-E
+//                       fast-path or pSubsystem).
+//
+// Compact wire format (3 sequential 8-byte writes to BAR0 + MailboxBase
+// + qid*MailboxStride):
+//   word 0: [63:56] opcode | [55:48] flags | [47:32] cid | [31:0] nsid
+//   word 1: [63: 0] slba
+//   word 2: [63:32] prp1_lo32 | [31:16] nlb (0-based) | [15:0] control
+//
+// v1 limitation: single-page transfers only (nlb*lba_size <= page_size).
+// SPDK is responsible for falling back to the standard path on larger
+// transfers; the controller defends in depth by rejecting oversize here.
+// ---------------------------------------------------------------------------
+
+void Controller::handleMailboxWrite(uint16_t qid, uint8_t wordIdx,
+                                    uint64_t value, uint64_t tick) {
+  if (qid == 0 || qid >= mailboxLatches.size()) {
+    // Admin (qid==0) and out-of-range writes are ignored.  Mode B does not
+    // use the admin mailbox.
+    return;
+  }
+  if (wordIdx > 2) return;  // defensive
+
+  MailboxLatch &latch = mailboxLatches[qid];
+
+  // FSM transition: writes must arrive in order 0, 1, 2.  A mid-sequence
+  // violation (e.g. word 2 lands when nextWord==1) resets the latch and
+  // accepts the current write as word 0 ONLY if wordIdx==0; otherwise
+  // we drop it.  This matches the RTL S_LATCH "same-qid guard" semantics.
+  if (wordIdx != latch.nextWord) {
+    uncoreStats.mailboxLatchResets++;
+    latch.nextWord = 0;
+    if (wordIdx != 0) {
+      return;  // wait for a fresh word 0
+    }
+  }
+
+  latch.words[wordIdx] = value;
+  latch.lastTick = tick;
+  latch.nextWord++;
+
+  if (latch.nextWord == 3) {
+    // Arm the inject event after S_DECODE + S_INJECT cycles.  At 1 GHz the
+    // gem5 tick unit is 1 ps, so cycles * 1000 ps/cycle = ns delay.
+    uint64_t delay_ps =
+        ((uint64_t)uncoreCfg.mailboxDecodeCycles +
+         (uint64_t)uncoreCfg.mailboxInjectCycles) * 1000ULL;
+    if (!scheduled(mailboxInjectEvent)) {
+      schedule(mailboxInjectEvent, tick + delay_ps);
+    }
+    // If already scheduled (another qid's third word landed first), the
+    // running event will sweep all qids whose nextWord==3 when it fires,
+    // so we don't need to reschedule.
+  }
+}
+
+void Controller::mailboxInject(uint16_t qid, uint64_t tick) {
+  (void)tick;  // tick parameter retained for symmetry / future telemetry
+  if (qid == 0 || qid >= mailboxLatches.size()) return;
+  MailboxLatch &latch = mailboxLatches[qid];
+  if (latch.nextWord != 3) return;  // not ready
+
+  // ---- Decode the compact 24-byte descriptor ----
+  uint64_t w0 = latch.words[0];
+  uint64_t w1 = latch.words[1];
+  uint64_t w2 = latch.words[2];
+
+  uint8_t  opcode  = (uint8_t)((w0 >> 56) & 0xFF);
+  uint8_t  flags   = (uint8_t)((w0 >> 48) & 0xFF);
+  uint16_t cid     = (uint16_t)((w0 >> 32) & 0xFFFF);
+  uint32_t nsid   = (uint32_t)(w0 & 0xFFFFFFFFu);
+  uint64_t slba    = w1;
+  uint32_t prp1_lo = (uint32_t)((w2 >> 32) & 0xFFFFFFFFu);
+  uint16_t nlb     = (uint16_t)((w2 >> 16) & 0xFFFF);
+  uint16_t ctrl    = (uint16_t)(w2 & 0xFFFF);
+
+  // Oversize guard: nlb is 0-based, so the transfer is (nlb+1)*lbaSize bytes.
+  // Reject if it exceeds one host memory page (single-page limitation in v1).
+  uint64_t lbaSize = conf.readUint(CONFIG_NVME, NVME_LBA_SIZE);
+  uint64_t bytes   = ((uint64_t)nlb + 1ULL) * lbaSize;
+  if (bytes > (uint64_t)cfgdata.memoryPageSize) {
+    uncoreStats.mailboxOversizeFallbk++;
+    latch.nextWord = 0;
+    return;
+  }
+
+  // ---- Synthesize a full SQEntry matching the standard NVMe layout ----
+  SQEntry entry;
+  memset(entry.data, 0, sizeof(entry.data));
+  entry.dword0.opcode    = opcode;
+  entry.dword0.fuse      = flags;
+  entry.dword0.commandID = cid;
+  entry.namespaceID      = nsid;
+  // data1 = PRP1, data2 = PRP2.  Mode 2 v1 supports single-page transfers
+  // only, so PRP2 == 0; PRP1 carries the host-buffer DMA address (lower 32
+  // bits via the mailbox; upper 32 bits are reconstructed from cfgdata's
+  // memory-page-size alignment if needed — for 4 KB pages this is zero).
+  entry.data1            = (uint64_t)prp1_lo;
+  entry.data2            = 0;
+  entry.dword10          = (uint32_t)(slba & 0xFFFFFFFFu);
+  entry.dword11          = (uint32_t)((slba >> 32) & 0xFFFFFFFFu);
+  entry.dword12          = ((uint32_t)ctrl << 16) | (uint32_t)nlb;
+
+  // SQEntryWrapper(entry, sqID, cqID, sqHead, sqUID).  sqHead/sqUID are
+  // used only for CQE sqHead echo-back; the mailbox path does not touch
+  // the host's SQ memory, so 0/0 are safe values.
+  SQEntryWrapper wrapper(entry, qid, /*cqID*/ qid, /*sqHead*/ 0, /*sqUID*/ 0);
+
+  // Push into the internal SQ FIFO.  handleRequest() will route via Path-E
+  // fast-path if enabled (sqID != 0 is true here), otherwise via pSubsystem.
+  lSQFIFO.push_back(wrapper);
+  {
+    static uint32_t mbx_logged = 0;
+    if (mbx_logged < 30) {
+      fprintf(stderr,
+              "[DBG_MBX_INJ] qid=%u opc=0x%02X cid=%u nsid=%u slba=0x%lx nlb=%u\n",
+              (unsigned)qid, (unsigned)opcode, (unsigned)cid,
+              (unsigned)nsid, (unsigned long)slba, (unsigned)nlb);
+      mbx_logged++;
+    }
+  }
+
+  // Wake handleRequest if it's idle.  Use requestInterval == 0 so it fires
+  // promptly; the scheduler still amortizes via requestCounter+maxRequest.
+  if (!scheduled(requestEvent)) {
+    schedule(requestEvent, getTick());
+  }
+
+  uncoreStats.mailboxSubmissions++;
+  uncoreStats.mailboxDecodeCyclesTot += uncoreCfg.mailboxDecodeCycles;
+  uncoreStats.mailboxInjectCyclesTot += uncoreCfg.mailboxInjectCycles;
+
+  // Reset latch for the next compact SQE on this qid.
+  latch.nextWord = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Mechanism #1 / #2 / #4 — CQ-side deep offload primitives.
+//
+// freeCidReadNext() : pop next free CID for `qid` (read endpoint of Mech #1).
+// freeCidRecycle()  : push `cid` back into the free ring (CQE flush side).
+// getInflightCount(): Mech #2's queue-depth surface; reads inflight counter.
+// getMultiBitHint() : Mech #4; packs (count, age_units) into the 32-bit hint.
+// ---------------------------------------------------------------------------
+
+uint16_t Controller::freeCidReadNext(uint16_t qid) {
+  if (qid >= freeCidRings.size()) {
+    return 0xFFFF;
+  }
+  FreeCIDRing &r = freeCidRings[qid];
+  if (r.depth == 0) {
+    uncoreStats.freeCidStarvations++;
+    {
+      static uint32_t starve_logged = 0;
+      if (starve_logged < 30) {
+        fprintf(stderr, "[DBG_FCR_STARVE] qid=%u ring_size=%zu inflight=%u\n",
+                (unsigned)qid, r.ring.size(), (unsigned)r.inflight);
+        starve_logged++;
+      }
+    }
+    return 0xFFFF;
+  }
+  uint16_t cid = r.ring[r.head];
+  r.head = (r.head + 1) % (uint32_t)r.ring.size();
+  r.depth--;
+  r.inflight++;
+  uncoreStats.freeCidPops++;
+  {
+    static uint32_t pop_logged = 0;
+    if (pop_logged < 30) {
+      fprintf(stderr,
+              "[DBG_FCR_POP] qid=%u cid=%u depth_after=%u inflight=%u ring_size=%zu\n",
+              (unsigned)qid, (unsigned)cid, (unsigned)r.depth,
+              (unsigned)r.inflight, r.ring.size());
+      pop_logged++;
+    }
+  }
+  return cid;
+}
+
+void Controller::freeCidRecycle(uint16_t qid, uint16_t cid) {
+  if (qid >= freeCidRings.size()) return;
+  FreeCIDRing &r = freeCidRings[qid];
+  if (r.depth >= r.ring.size()) {
+    // Ring full: should never happen if the host honors the QueueDepth
+    // contract.  Warn once and drop.
+    static uint32_t full_logged = 0;
+    if (full_logged < 30) {
+      fprintf(stderr,
+              "[DBG_FCR_FULL] qid=%u cid=%u ring_size=%zu depth=%u inflight=%u (DROP)\n",
+              (unsigned)qid, (unsigned)cid, r.ring.size(),
+              (unsigned)r.depth, (unsigned)r.inflight);
+      full_logged++;
+    }
+    return;
+  }
+  r.ring[r.tail] = cid;
+  r.tail = (r.tail + 1) % (uint32_t)r.ring.size();
+  r.depth++;
+  if (r.inflight > 0) r.inflight--;
+  uncoreStats.freeCidPushes++;
+  {
+    static uint32_t rec_logged = 0;
+    if (rec_logged < 30) {
+      fprintf(stderr,
+              "[DBG_FCR_REC] qid=%u cid=%u depth_after=%u inflight=%u\n",
+              (unsigned)qid, (unsigned)cid, (unsigned)r.depth,
+              (unsigned)r.inflight);
+      rec_logged++;
+    }
+  }
+}
+
+uint32_t Controller::getInflightCount(uint16_t qid) const {
+  if (qid >= freeCidRings.size()) return 0;
+  return freeCidRings[qid].inflight;
+}
+
+uint32_t Controller::getMultiBitHint() const {
+  uint32_t count = uncoreHintReady & 0xFFFFu;
+  uint16_t age_units = 0;
+  if (count > 0 && hintOldestArrivalTicks > 0) {
+    // Mirror the rest of the controller's tick-source convention (getTick()).
+    // const-method context: getTick() is a free function in the simplessd
+    // simulator interface, so no `this` involved.
+    uint64_t now = SimpleSSD::getTick();
+    uint64_t age = (now > hintOldestArrivalTicks)
+                       ? (now - hintOldestArrivalTicks)
+                       : 0ULL;
+    uint64_t unit = uncoreCfg.hintAgeGranularityPs;
+    if (unit == 0) unit = 1;
+    uint64_t a = age / unit;
+    age_units = (a > 0xFFFFu) ? (uint16_t)0xFFFFu : (uint16_t)a;
+  }
+  return (((uint32_t)age_units) << 16) | count;
 }
 
 // ---------------------------------------------------------------------------
@@ -2011,6 +2647,18 @@ void Controller::getStatList(std::vector<Stats> &list, std::string prefix) {
       list.push_back({p + "flush_depth_hist_" + std::to_string(i),
                       "Flush depth histogram bucket " + std::to_string(i)});
     }
+    // Mode 2 mailbox stats (zero-valued in Mode 0/1; populated only in Mode B).
+    list.push_back({p + "mailbox_submissions",       "Mode 2 mailbox submissions (3rd word -> SQE inject)"});
+    list.push_back({p + "mailbox_latch_resets",      "Mailbox mid-sequence resets (word violations)"});
+    list.push_back({p + "mailbox_oversize_fallback", "Mailbox oversize rejects (>1 page)"});
+    list.push_back({p + "mailbox_decode_cycles",     "Cumulative S_DECODE cycles"});
+    list.push_back({p + "mailbox_inject_cycles",     "Cumulative S_INJECT cycles"});
+    // Mechanism #1 / #2 / #4 stats
+    list.push_back({p + "free_cid_pops",          "Mech #1: successful free-CID pops"});
+    list.push_back({p + "free_cid_pushes",        "Mech #1: CIDs recycled on CQE flush"});
+    list.push_back({p + "free_cid_starvations",   "Mech #1: pops that returned 0xFFFF (ring empty)"});
+    list.push_back({p + "qdepth_reads",           "Mech #2: MMIO reads of in-flight count"});
+    list.push_back({p + "hint_typed_reads",       "Mech #4: typed hint register reads"});
   }
   pSubsystem->getStatList(list, prefix);
 }
@@ -2029,6 +2677,17 @@ void Controller::getStatValues(std::vector<double> &values) {
     for (int i = 0; i < 64; i++) {
       values.push_back((double)uncoreStats.flushDepthHist[i]);
     }
+    values.push_back((double)uncoreStats.mailboxSubmissions);
+    values.push_back((double)uncoreStats.mailboxLatchResets);
+    values.push_back((double)uncoreStats.mailboxOversizeFallbk);
+    values.push_back((double)uncoreStats.mailboxDecodeCyclesTot);
+    values.push_back((double)uncoreStats.mailboxInjectCyclesTot);
+    // Mechanism #1 / #2 / #4 stats
+    values.push_back((double)uncoreStats.freeCidPops);
+    values.push_back((double)uncoreStats.freeCidPushes);
+    values.push_back((double)uncoreStats.freeCidStarvations);
+    values.push_back((double)uncoreStats.qdepthReads);
+    values.push_back((double)uncoreStats.hintTypedReads);
   }
   pSubsystem->getStatValues(values);
 }
