@@ -51,9 +51,11 @@ yosys "script synth/dfflegalize.ys"
 # Map DFF cells to ASAP7 sequential library cells
 yosys dfflibmap -liberty lib/asap7sc7p5t_SEQ_RVT_TT_trimmed.lib
 
-# Map combinational logic to ASAP7 standard cells
-# Use inline ABC script with classic 'map' to avoid &nf segfault
-yosys "abc -liberty lib/asap7sc7p5t_SIMPLE_RVT_TT_nldm_211120.lib -script +strash;dc2;map"
+# Map combinational logic to ASAP7 standard cells.
+# Use inline ABC script with classic mapper + buffer/sizing passes so the
+# resulting netlist is closer to timing-closed (fanout-aware).
+# -D 1000 = 1000 ps clock target.
+yosys "abc -D 1000 -liberty lib/asap7sc7p5t_SIMPLE_RVT_TT_nldm_211120.lib -script +strash;dc2;map,-B,0.9"
 yosys {opt -fast}
 yosys clean -purge
 
@@ -61,6 +63,6 @@ yosys clean -purge
 file mkdir reports
 file mkdir netlists
 yosys tee -o reports/stat_${TAG}.rpt stat
-yosys tee -o netlists/io_uncore_${TAG}.v write_verilog -noattr
+yosys write_verilog -noattr netlists/io_uncore_${TAG}.v
 
 yosys log "===== Synthesis complete: NQ=$NQ QD=$QD ====="

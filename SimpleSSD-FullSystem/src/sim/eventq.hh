@@ -833,7 +833,16 @@ class EventFunctionWrapper : public Event
             setFlags(AutoDelete);
     }
 
-    void process() { callback(); }
+    void process() {
+        // Diagnostic: identify which event has an empty std::function before
+        // std::bad_function_call swallows the source location.  See
+        // docs/TIMING_CACHES_PREP_PLAN.md §7.
+        if (!callback) {
+            panic("EventFunctionWrapper '%s': empty std::function callback "
+                  "invoked", _name);
+        }
+        callback();
+    }
 
     const std::string
     name() const

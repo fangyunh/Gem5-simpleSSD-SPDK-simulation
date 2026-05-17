@@ -12,6 +12,29 @@ DISK_IMAGE=${DISK_IMAGE:-"$ROOT_DIR/assets/x86-ubuntu.img"}
 SSD_CONFIG=${SSD_CONFIG:-"$ROOT_DIR/fast_ssd.cfg"}
 MEM_SIZE=${MEM_SIZE:-"4GB"}
 ROOT_DEV=${ROOT_DEV:-"/dev/hda1"}
+# Number of guest CPUs (default 1 for backward compat).  Set by drivers that
+# want multi-host-core gem5 boots (e.g. driver_phase1_trace.sh --num-cpus N).
+NUM_CPUS=${NUM_CPUS:-1}
+
+# Host CPU model (default AtomicSimpleCPU for fast simulation, no caches).
+# Set to TimingSimpleCPU for realistic memory-timing model that allows multi-
+# host-CPU memory accesses to overlap.  Requires ENABLE_CACHES=1 to make
+# scaling meaningful (otherwise every fetch/load still hits the shared
+# membus and serializes).  See docs/TIMING_CACHES_PREP_PLAN.md.
+CPU_TYPE=${CPU_TYPE:-AtomicSimpleCPU}
+
+# Enable L1I/L1D per CPU + shared L2.  When ENABLE_CACHES=1, gem5 args get
+# --caches appended.  ENABLE_L2_CACHE=1 (default) additionally appends --l2cache.
+# Default sizes from Options.py: L1I 32 kB, L1D 64 kB, L2 2 MB.  No effect on
+# AtomicSimpleCPU (which is wired direct to the membus in our cfg) — set
+# CPU_TYPE=TimingSimpleCPU to actually use the caches.
+#
+# Note: at NUM_CPUS>=4 + TimingSimpleCPU + --l2cache + SimpleSSD this gem5
+# build hits a "bad_function_call" during SMP bring-up (empty std::function
+# in the power-state callback path).  Workaround: ENABLE_L2_CACHE=0 to run
+# L1-only.  Tracked in docs/TIMING_CACHES_PREP_PLAN.md.
+ENABLE_CACHES=${ENABLE_CACHES:-0}
+ENABLE_L2_CACHE=${ENABLE_L2_CACHE:-1}
 VIO_9P=${VIO_9P:-0}
 HOST_SHARE=${HOST_SHARE:-""}
 VIO_9P_SET_ROOT=${VIO_9P_SET_ROOT:-0}
@@ -23,6 +46,10 @@ GEM5_OUTDIR=${GEM5_OUTDIR:-"$GEM5_DIR/m5out"}
 
 CHECKPOINT_DIR=${CHECKPOINT_DIR:-"$ROOT_DIR/results/checkpoints"}
 CHECKPOINT_RESTORE=${CHECKPOINT_RESTORE:-""}
+# When restoring from a checkpoint taken under one CPU model, optionally
+# switch to a different CPU model on restore (e.g., atomic-mode boot →
+# TimingSimpleCPU+caches for the workload).  See TIMING_CACHES_PREP_PLAN §7.3.
+RESTORE_WITH_CPU=${RESTORE_WITH_CPU:-""}
 READFILE_SCRIPT=${READFILE_SCRIPT:-""}
 
 mkdir -p "$LOG_DIR"
@@ -83,11 +110,19 @@ start_gem5() {
     --kernel="$KERNEL"
     --disk-image="$DISK_IMAGE"
     --mem-size="$MEM_SIZE"
+    --num-cpus="$NUM_CPUS"
+    --cpu-type="$CPU_TYPE"
     --root-device="$ROOT_DEV"
     --ssd-interface=nvme
     --ssd-config="$SSD_CONFIG"
     --checkpoint-dir="$CHECKPOINT_DIR"
   )
+  if [ "$ENABLE_CACHES" -eq 1 ]; then
+    GEM5_ARGS+=(--caches)
+    if [ "$ENABLE_L2_CACHE" -eq 1 ]; then
+      GEM5_ARGS+=(--l2cache)
+    fi
+  fi
 
   if [ "$VIO_9P" -eq 1 ]; then
     if ! command -v diod >/dev/null 2>&1; then
@@ -107,6 +142,9 @@ start_gem5() {
 
   if [ -n "$CHECKPOINT_RESTORE" ]; then
     GEM5_ARGS+=(--checkpoint-restore="$CHECKPOINT_RESTORE")
+    if [ -n "$RESTORE_WITH_CPU" ]; then
+      GEM5_ARGS+=(--restore-with-cpu="$RESTORE_WITH_CPU")
+    fi
   fi
 
   if [ ! -x "./build/X86/gem5.opt" ]; then

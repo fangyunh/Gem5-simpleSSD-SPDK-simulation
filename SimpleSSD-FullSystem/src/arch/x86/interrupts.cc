@@ -56,6 +56,7 @@
 
 #include "arch/x86/intmessage.hh"
 #include "arch/x86/regs/apic.hh"
+#include "base/logging.hh"
 #include "cpu/base.hh"
 #include "debug/LocalApic.hh"
 #include "dev/x86/i82094aa.hh"
@@ -346,11 +347,17 @@ X86ISA::Interrupts::recvMessage(PacketPtr pkt)
 void
 X86ISA::Interrupts::completeIPI(PacketPtr pkt)
 {
+    uint32_t old = pendingIPIs;
     if (--pendingIPIs == 0) {
         InterruptCommandRegLow low = regs[APIC_INTERRUPT_COMMAND_LOW];
         // Record that the ICR is now idle.
         low.deliveryStatus = 0;
         regs[APIC_INTERRUPT_COMMAND_LOW] = low;
+        inform("IPI_DBG[%s]: completeIPI pkt=%p pendingIPIs %u->0 (ICR=idle)",
+               name(), (void*)pkt, old);
+    } else {
+        inform("IPI_DBG[%s]: completeIPI pkt=%p pendingIPIs %u->%u",
+               name(), (void*)pkt, old, pendingIPIs);
     }
     DPRINTF(LocalApic, "ICR is now idle.\n");
     delete pkt;
@@ -559,7 +566,10 @@ X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val)
             // Record that an IPI is being sent if one actually is.
             if (apics.size()) {
                 low.deliveryStatus = 1;
+                uint32_t old = pendingIPIs;
                 pendingIPIs += apics.size();
+                inform("IPI_DBG[%s]: ICR_WRITE targets=%zu pendingIPIs %u->%u (delivery=1)",
+                       name(), apics.size(), old, pendingIPIs);
             }
             regs[APIC_INTERRUPT_COMMAND_LOW] = low;
             for (auto id: apics) {

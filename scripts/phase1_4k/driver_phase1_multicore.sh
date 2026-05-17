@@ -198,6 +198,25 @@ patch_ssd_config() {
         "$SSD_CONFIG"
     echo "Patched $SSD_CONFIG: UncoreMode=$UNCORE_MODE CQBatchN=$CQ_BATCH_N CQBatchT=$CQ_BATCH_T DBBatchB=$DB_BATCH_B" \
         | tee -a "$LOG_FILE"
+
+    # --- Multi-qpair validation (2026-05-14) -----------------------------------
+    local max_io_cq
+    max_io_cq=$(awk -F= '/^[[:space:]]*MaxIOCQueue[[:space:]]*=/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' "$SSD_CONFIG")
+    if [ -n "$max_io_cq" ]; then
+        local max_cores=1 max_qp=1 c q
+        for c in $CORE_COUNTS_LIST; do
+            [ "$c" -gt "$max_cores" ] && max_cores="$c"
+        done
+        for q in $QPAIRS_LIST; do
+            [ "$q" -gt "$max_qp" ] && max_qp="$q"
+        done
+        local needed=$(( max_cores * max_qp ))
+        echo "[QPAIR] cfg=$SSD_CONFIG MaxIOCQueue=$max_io_cq cores_list=\"$CORE_COUNTS_LIST\" qpairs_list=\"$QPAIRS_LIST\" max_total_needed=$needed" | tee -a "$LOG_FILE"
+        if [ "$needed" -gt "$max_io_cq" ]; then
+            echo "ERROR: max_cores * max_qpairs_per_core = $max_cores * $max_qp = $needed exceeds cfg MaxIOCQueue=$max_io_cq." | tee -a "$LOG_FILE" >&2
+            exit 2
+        fi
+    fi
 }
 
 # --- write metadata sidecar ---

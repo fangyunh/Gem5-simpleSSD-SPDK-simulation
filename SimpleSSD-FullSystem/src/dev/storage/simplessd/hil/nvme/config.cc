@@ -97,7 +97,11 @@ Config::Config() {
   mailboxDecodeCycles  = 8;
   mailboxInjectCycles  = 4;
   // Mechanism #1/#2/#4 defaults
-  freeCidBase           = 0x3400;
+  // freeCidBase moved 0x3400 -> 0x4000 (2026-05-14) so the mailbox region
+  // (MailboxBase + cqsize*MailboxStride; up to 0x3820 at MaxIOCQueue=64)
+  // does not collide.  Must match spdk/lib/nvme/nvme_pcie_internal.h
+  // FREE_CID_BASE_OFFSET and QDEPTH_BASE_OFFSET (= freeCidBase + 0x400).
+  freeCidBase           = 0x4000;
   freeCidLatencyCycles  = 2;
   hintAgeGranularityPs  = 1024000ULL;  // 1 µs per age unit
 

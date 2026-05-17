@@ -107,15 +107,20 @@ struct nvme_pcie_ctrlr {
 
 /* Mode 2B mailbox layout — must match SimpleSSD's MailboxBase/Stride cfg.
  * Per-qid slot = 32 bytes (4 × uint64_t).  Slot 0 (admin) is allocated
- * but unused by the submit hot path. */
+ * but unused by the submit hot path.
+ * With MaxIOCQueue=64 (cqsize=65) the mailbox region spans
+ *   0x3000 .. 0x3000 + 65*0x20 = 0x3820
+ * which is why FREE_CID_BASE_OFFSET below is 0x4000, not 0x3400. */
 #define MAILBOX_BASE_OFFSET   0x3000
 #define MAILBOX_STRIDE_BYTES  0x20
 /* Mechanism #1 (free-CID ring) + #2 (queue-depth counter) read endpoints.
  * Must match SimpleSSD's FreeCIDBase cfg.  Layout (per qpair):
  *   uncore_free_cid_base[qid]                         -> next free CID
- *   uncore_qdepth_base[qid]   = base + 0x400 / sizeof  -> inflight count */
-#define FREE_CID_BASE_OFFSET  0x3400
-#define QDEPTH_BASE_OFFSET    0x3800
+ *   uncore_qdepth_base[qid]   = base + 0x400 / sizeof  -> inflight count
+ * Moved 0x3400 -> 0x4000 (and 0x3800 -> 0x4400) on 2026-05-14 to give the
+ * mailbox region 4 KB of headroom for up to 128 qids at stride 0x20. */
+#define FREE_CID_BASE_OFFSET  0x4000
+#define QDEPTH_BASE_OFFSET    0x4400
 
 extern __thread struct nvme_pcie_ctrlr *g_thread_mmio_ctrlr;
 

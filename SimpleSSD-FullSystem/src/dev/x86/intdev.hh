@@ -46,7 +46,9 @@
 #include <cassert>
 #include <functional>
 #include <string>
+#include <unordered_map>
 
+#include "base/logging.hh"
 #include "mem/tport.hh"
 #include "sim/sim_object.hh"
 
@@ -105,7 +107,17 @@ class IntMasterPort : public QueuedMasterPort
     Tick latency;
 
     typedef std::function<void(PacketPtr)> OnCompletionFunc;
-    OnCompletionFunc onCompletion = nullptr;
+    // Per-packet completion callbacks.  Upstream gem5 stored a SCALAR
+    // onCompletion here, which is correct only when at most one IPI is
+    // in-flight at a time.  With NUM_CPUS >= 4 + TimingSimpleCPU + caches,
+    // a CPU's APIC can have multiple IPIs in-flight (e.g. broadcast IPI
+    // targeting all-other-CPUs generates one packet per target).  The
+    // scalar got overwritten by the second sendMessage; when the first
+    // response arrived, onCompletion fired the wrong callback, and when
+    // the second arrived, onCompletion was nullptr -> bad_function_call.
+    // Keying by PacketPtr is safe: each Packet is unique and lives until
+    // its completion callback runs (which then deletes/transfers it).
+    std::unordered_map<PacketPtr, OnCompletionFunc> onCompletionMap;
     // If nothing extra needs to happen, just clean up the packet.
     static void defaultOnCompletion(PacketPtr pkt) { delete pkt; }
 
@@ -122,8 +134,18 @@ class IntMasterPort : public QueuedMasterPort
     recvTimingResp(PacketPtr pkt) override
     {
         assert(pkt->isResponse());
-        onCompletion(pkt);
-        onCompletion = nullptr;
+        auto it = onCompletionMap.find(pkt);
+        if (it != onCompletionMap.end()) {
+            OnCompletionFunc func = std::move(it->second);
+            onCompletionMap.erase(it);
+            inform("IPI_DBG[%s]: recv MATCH pkt=%p mapsize=%zu",
+                   name(), (void*)pkt, onCompletionMap.size());
+            func(pkt);
+        } else {
+            inform("IPI_DBG[%s]: recv UNMATCHED pkt=%p mapsize=%zu",
+                   name(), (void*)pkt, onCompletionMap.size());
+            delete pkt;
+        }
         return true;
     }
 
@@ -132,11 +154,11 @@ class IntMasterPort : public QueuedMasterPort
             OnCompletionFunc func=defaultOnCompletion)
     {
         if (timing) {
-            onCompletion = func;
+            onCompletionMap[pkt] = func;
+            inform("IPI_DBG[%s]: send pkt=%p mapsize=%zu",
+                   name(), (void*)pkt, onCompletionMap.size());
             schedTimingReq(pkt, curTick() + latency);
-            // The target handles cleaning up the packet in timing mode.
         } else {
-            // ignore the latency involved in the atomic transaction
             sendAtomic(pkt);
             func(pkt);
         }

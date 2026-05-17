@@ -1,0 +1,5 @@
+config,period_ps_meeting,fmax_MHz
+NQ=16_QD=64,4901,204.0
+NQ=16_QD=128,4901,204.0
+NQ=64_QD=64,6625,150.9
+NQ=64_QD=128,6625,150.9

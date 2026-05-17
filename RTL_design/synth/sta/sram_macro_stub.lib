@@ -1,0 +1,73 @@
+/* sram_macro_stub.lib — minimal Liberty for the IO-Uncore SRAM black-box.
+ * Single-cycle clock-to-Q chosen so OpenSTA can close timing through it.
+ * Power numbers are placeholders (analytical SRAM power is added separately
+ * by scripts/sram_area_model.py).
+ */
+library (sram_macro_stub) {
+  technology (cmos);
+  delay_model : table_lookup;
+  time_unit : "1ps";
+  voltage_unit : "1V";
+  current_unit : "1mA";
+  pulling_resistance_unit : "1kohm";
+  capacitive_load_unit (1, ff);
+  leakage_power_unit : "1pW";
+  default_operating_conditions : tt_0p7v_25c;
+  nom_voltage : 0.7;
+  nom_temperature : 25.0;
+  nom_process : 1.0;
+
+  operating_conditions (tt_0p7v_25c) {
+    process : 1.0;
+    voltage : 0.7;
+    temperature : 25.0;
+    tree_type : balanced_tree;
+  }
+
+  default_max_transition  : 80.0;
+  default_input_pin_cap   : 1.0;
+  default_output_pin_cap  : 0.0;
+  default_fanout_load     : 1.0;
+  default_cell_leakage_power : 0.0;
+
+  type (addr_bus)  { base_type : array; data_type : bit; bit_width : 20;  bit_from : 19;  bit_to : 0; downto : true; }
+  type (wdata_bus) { base_type : array; data_type : bit; bit_width : 512; bit_from : 511; bit_to : 0; downto : true; }
+  type (rdata_bus) { base_type : array; data_type : bit; bit_width : 512; bit_from : 511; bit_to : 0; downto : true; }
+
+  lu_table_template (delay_1d) {
+    variable_1 : input_net_transition;
+    index_1 ("5.0, 20.0, 80.0");
+  }
+
+  cell (sram_macro) {
+    area : 0;
+    is_macro_cell : true;
+    dont_use : false;
+
+    pin (clk)   { direction : input;  clock : true;  capacitance : 5.0; }
+    pin (we)    { direction : input;  capacitance : 1.0; }
+
+    bus (addr) {
+      bus_type : addr_bus;
+      direction : input;
+      capacitance : 1.0;
+    }
+    bus (wdata) {
+      bus_type : wdata_bus;
+      direction : input;
+      capacitance : 1.0;
+    }
+    bus (rdata) {
+      bus_type : rdata_bus;
+      direction : output;
+      timing () {
+        related_pin : "clk";
+        timing_type : rising_edge;
+        cell_rise (delay_1d) { values ("400.0, 450.0, 500.0"); }
+        cell_fall (delay_1d) { values ("400.0, 450.0, 500.0"); }
+        rise_transition (delay_1d) { values ("20.0, 40.0, 80.0"); }
+        fall_transition (delay_1d) { values ("20.0, 40.0, 80.0"); }
+      }
+    }
+  }
+}

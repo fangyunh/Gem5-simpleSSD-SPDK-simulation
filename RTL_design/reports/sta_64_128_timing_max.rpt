@@ -1,0 +1,37 @@
+Warning 168: run_sta.tcl line 1, unknown field nets.
+Warning 502: run_sta.tcl line 1, report_checks -endpoint_count is deprecated. Use -endpoint_path_count instead.
+Warning 503: run_sta.tcl line 1, report_checks -group_count is deprecated. Use -group_path_count instead.
+Startpoint: _184758_ (rising edge-triggered flip-flop clocked by clk)
+Endpoint: _176908_ (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+
+     Cap     Slew    Delay     Time   Description
+---------------------------------------------------------------------------
+           20.000    0.000    0.000   clock clk (rise edge)
+                     0.000    0.000   clock network delay (ideal)
+           20.000    0.000    0.000 ^ _184758_/CLK (DFFHQNx1_ASAP7_75t_R)
+   7.199   72.688   83.898   83.898 ^ _184758_/QN (DFFHQNx1_ASAP7_75t_R)
+ 490.768 8459.049 4008.731 4092.629 v _092670_/Y (NAND3xp33_ASAP7_75t_R)
+   1.020 1411.936 1322.725 5415.354 ^ _143581_/Y (NAND2xp33_ASAP7_75t_R)
+  22.534  548.766  542.681 5958.035 v _144618_/Y (NAND2xp33_ASAP7_75t_R)
+  22.185 1521.847  476.092 6434.127 ^ _144619_/Y (NAND2xp33_ASAP7_75t_R)
+   0.347  179.141   59.206 6493.333 v _144806_/Y (NAND2xp33_ASAP7_75t_R)
+   0.559   53.503   47.795 6541.128 ^ _144808_/Y (NAND2xp33_ASAP7_75t_R)
+           53.503    0.000 6541.128 ^ _176908_/D (DFFHQNx1_ASAP7_75t_R)
+                           6541.128   data arrival time
+
+           20.000 1000.000 1000.000   clock clk (rise edge)
+                     0.000 1000.000   clock network delay (ideal)
+                   -50.000  950.000   clock uncertainty
+                     0.000  950.000   clock reconvergence pessimism
+                            950.000 ^ _176908_/CLK (DFFHQNx1_ASAP7_75t_R)
+                   -14.896  935.104   library setup time
+                            935.104   data required time
+---------------------------------------------------------------------------
+                            935.104   data required time
+                           -6541.128   data arrival time
+---------------------------------------------------------------------------
+                           -5606.024   slack (VIOLATED)
+
+

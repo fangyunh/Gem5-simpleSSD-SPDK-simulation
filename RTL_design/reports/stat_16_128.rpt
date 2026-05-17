@@ -5,24 +5,24 @@
 
         +----------Local Count, excluding submodules.
         | 
-    29594 wires
-    31198 wire bits
+    29569 wires
+    31173 wire bits
        26 public wires
      1630 public wire bits
        23 ports
       586 port bits
-    30170 cells
+    30145 cells
       139   DFFASRHQNx1_ASAP7_75t_R
      5152   DFFHQNx1_ASAP7_75t_R
-       45   MAJIxp5_ASAP7_75t_R
-       13   MAJx3_ASAP7_75t_R
-    21033   NAND2xp33_ASAP7_75t_R
-     2377   NAND3xp33_ASAP7_75t_R
-      850   NAND4xp25_ASAP7_75t_R
-      378   NAND5xp2_ASAP7_75t_R
-       30   NOR2xp33_ASAP7_75t_R
-        5   OR3x1_ASAP7_75t_R
+       46   MAJIxp5_ASAP7_75t_R
+       14   MAJx3_ASAP7_75t_R
+    21035   NAND2xp33_ASAP7_75t_R
+     2379   NAND3xp33_ASAP7_75t_R
+      851   NAND4xp25_ASAP7_75t_R
+      345   NAND5xp2_ASAP7_75t_R
+       25   NOR2xp33_ASAP7_75t_R
+        6   OR3x1_ASAP7_75t_R
         7   XNOR2x2_ASAP7_75t_R
-      140   XOR2x2_ASAP7_75t_R
+      145   XOR2x2_ASAP7_75t_R
         1   sram_macro
 

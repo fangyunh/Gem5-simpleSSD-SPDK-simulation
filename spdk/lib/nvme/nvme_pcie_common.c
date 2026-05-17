@@ -244,6 +244,22 @@ nvme_pcie_qpair_construct(struct spdk_nvme_qpair *qpair,
 	pqpair->sq_tdbl = pctrlr->doorbell_base + (2 * qpair->id + 0) * pctrlr->doorbell_stride_u32;
 	pqpair->cq_hdbl = pctrlr->doorbell_base + (2 * qpair->id + 1) * pctrlr->doorbell_stride_u32;
 
+	/* Multi-qpair debug banner: one line per qpair construct, prints every
+	 * per-qid endpoint we computed so we can prove qid > 1 is wired right.
+	 * Cheap (one line per qpair create), invaluable when something misroutes. */
+	NVME_QPAIR_NOTICELOG(qpair,
+		"UNCORE-Q | qid=%u sq_tdbl=%p cq_hdbl=%p mailbox_slot=%p free_cid_ep=%p qdepth_ep=%p\n",
+		qpair->id,
+		(void *)pqpair->sq_tdbl,
+		(void *)pqpair->cq_hdbl,
+		pctrlr->uncore_mailbox_base ?
+		    (void *)(pctrlr->uncore_mailbox_base +
+		             qpair->id * (MAILBOX_STRIDE_BYTES / sizeof(uint64_t))) : NULL,
+		pctrlr->uncore_free_cid_base ?
+		    (void *)&pctrlr->uncore_free_cid_base[qpair->id] : NULL,
+		pctrlr->uncore_qdepth_base ?
+		    (void *)&pctrlr->uncore_qdepth_base[qpair->id] : NULL);
+
 	/*
 	 * Reserve space for all of the trackers in a single allocation.
 	 *   struct nvme_tracker must be padded so that its size is already a power of 2.
@@ -1002,9 +1018,37 @@ nvme_pcie_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
 	{
 		struct nvme_pcie_ctrlr *pctrlr =
 			nvme_pcie_ctrlr(qpair->ctrlr);
+		static uint64_t _dbg_proc_calls = 0;
+		static uint64_t _dbg_hint_reg_null = 0;
+		static uint64_t _dbg_hint_qid0 = 0;
+		static uint64_t _dbg_hint_state = 0;
+		static uint64_t _dbg_hint_entered = 0;
+		_dbg_proc_calls++;
+		enum nvme_qpair_state _st_now = nvme_qpair_get_state(qpair);
+		bool _live = (_st_now == NVME_QPAIR_CONNECTED) ||
+			      (_st_now == NVME_QPAIR_ENABLED);
+		if (pctrlr->uncore_hint_reg == NULL) {
+			_dbg_hint_reg_null++;
+		} else if (qpair->id == 0) {
+			_dbg_hint_qid0++;
+		} else if (!_live) {
+			_dbg_hint_state++;
+		} else {
+			_dbg_hint_entered++;
+		}
+		if ((_dbg_proc_calls & 0xFFFFF) == 1) {
+			fprintf(stderr,
+				"[DBG_MECH4] calls=%lu reg_null=%lu qid0=%lu state=%lu entered=%lu "
+				"qid=%u state_now=%d hint_reg=%p\n",
+				_dbg_proc_calls, _dbg_hint_reg_null,
+				_dbg_hint_qid0, _dbg_hint_state,
+				_dbg_hint_entered, qpair->id,
+				(int)_st_now,
+				(void *)pctrlr->uncore_hint_reg);
+		}
 		if (spdk_likely(pctrlr->uncore_hint_reg != NULL) &&
 		    spdk_likely(qpair->id != 0) &&
-		    spdk_likely(nvme_qpair_get_state(qpair) == NVME_QPAIR_CONNECTED)) {
+		    spdk_likely(_live)) {
 			uint32_t hint = *pctrlr->uncore_hint_reg;
 			uint16_t count = (uint16_t)(hint & 0xFFFFu);
 			uint16_t age   = (uint16_t)(hint >> 16);

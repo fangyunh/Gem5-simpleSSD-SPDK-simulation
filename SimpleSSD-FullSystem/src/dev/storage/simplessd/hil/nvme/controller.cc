@@ -203,6 +203,60 @@ Controller::Controller(Interface *intrface, ConfigReader &c)
                (unsigned)uncoreCfg.mailboxInjectCycles);
   }
 
+  // --- Multi-qpair init banner + bounds check ---------------------------------
+  // One-shot summary of every region we serve out of BAR0, so any future cfg
+  // edit that walks a region into another shows up immediately in gem5.out.
+  // Also panic if any region overlaps or escapes BAR0 (defaults to 32 KB; the
+  // PCI device sets the actual size in NVMe.py).  At MaxIOCQueue=64 the
+  // mailbox occupies up to MailboxBase + 65*0x20 = 0x3820, so FreeCIDBase
+  // must be >= 0x3820 (we ship 0x4000).
+  {
+    const uint64_t bar0Size      = 0x8000;  // matches NVMe.py BAR0Size = '32768B'
+    const uint64_t doorbellBegin = REG_DOORBELL_BEGIN;
+    const uint64_t doorbellEnd   = REG_DOORBELL_END;
+    const uint64_t hintAddr      = 0x2000;
+    const uint64_t mailboxBegin  = uncoreCfg.mailboxBase;
+    const uint64_t mailboxEnd    = mailboxBegin +
+                                   (uint64_t)cqsize * (uint64_t)uncoreCfg.mailboxStride;
+    const uint64_t freeCidBegin  = uncoreCfg.freeCidBase;
+    const uint64_t freeCidEnd    = freeCidBegin + (uint64_t)cqsize * 4ULL;
+    const uint64_t qdepthBegin   = freeCidBegin + 0x400ULL;
+    const uint64_t qdepthEnd     = qdepthBegin + (uint64_t)cqsize * 4ULL;
+
+    debugprint(LOG_HIL_NVME,
+               "BAR0    | size=0x%" PRIx64 " maxIO_SQ=%u maxIO_CQ=%u cqsize=%u sqsize=%u",
+               bar0Size,
+               (unsigned)(sqsize - 1), (unsigned)(cqsize - 1),
+               (unsigned)cqsize, (unsigned)sqsize);
+    debugprint(LOG_HIL_NVME,
+               "BAR0    | doorbells=[0x%" PRIx64 ",0x%" PRIx64 ") hint=0x%" PRIx64
+               " mailbox=[0x%" PRIx64 ",0x%" PRIx64 ")",
+               doorbellBegin, doorbellEnd, hintAddr, mailboxBegin, mailboxEnd);
+    debugprint(LOG_HIL_NVME,
+               "BAR0    | freeCID=[0x%" PRIx64 ",0x%" PRIx64 ") qdepth=[0x%" PRIx64
+               ",0x%" PRIx64 ")",
+               freeCidBegin, freeCidEnd, qdepthBegin, qdepthEnd);
+
+    if (mailboxEnd > freeCidBegin) {
+      panic("BAR0: mailbox region [0x%" PRIx64 ",0x%" PRIx64
+            ") overlaps freeCID base 0x%" PRIx64
+            ". Bump FreeCIDBase or reduce MaxIOCQueue.",
+            mailboxBegin, mailboxEnd, freeCidBegin);
+    }
+    if (freeCidEnd > qdepthBegin) {
+      panic("BAR0: freeCID region [0x%" PRIx64 ",0x%" PRIx64
+            ") overlaps qdepth base 0x%" PRIx64
+            ". Internally derived (freeCID+0x400) - reduce MaxIOCQueue.",
+            freeCidBegin, freeCidEnd, qdepthBegin);
+    }
+    if (qdepthEnd > bar0Size) {
+      panic("BAR0: qdepth region [0x%" PRIx64 ",0x%" PRIx64
+            ") escapes BAR0 size 0x%" PRIx64
+            ". Bump BAR0Size in NVMe.py or reduce MaxIOCQueue.",
+            qdepthBegin, qdepthEnd, bar0Size);
+    }
+  }
+
   // --- Fast-path statistical timing model initialization ---
   // (NVMeVirt-style; cited as methodology in fast_ssd_highiops.cfg header.)
   fastPathCfg.enabled        = conf.readBoolean(CONFIG_NVME, NVME_FASTPATH_ENABLED);
@@ -805,8 +859,8 @@ int Controller::createSQueue(uint16_t sqid, uint16_t cqid, uint16_t size,
       ret = 0;
 
       debugprint(LOG_HIL_NVME,
-                 "SQ %-5d| CREATE | Entry size %d | Priority %d | PC %s", cqid,
-                 size, priority, BOOLEAN_STRING(pc));
+                 "SQ %-5d| CREATE | cqid=%u | Entry size %d | Priority %d | PC %s",
+                 sqid, (unsigned)cqid, size, priority, BOOLEAN_STRING(pc));
     }
     else {
       ret = 2;  // Invalid CQueue
@@ -2365,8 +2419,16 @@ void Controller::uncoreFlushCQBuffer(bool isShutdown) {
     freeCidRecycle(entry.cqID, entry.entry.dword3.commandID);
   }
   uncorePendingCQE.clear();
-  // Mechanism #4: no pending CQEs after the flush -> no age to report.
-  hintOldestArrivalTicks = 0;
+  // Mechanism #4 (fixed 2026-05-14): do NOT reset hintOldestArrivalTicks on
+  // flush.  After flush, the CQEs have been published to the host DRAM CQ
+  // but SPDK has not yet observed them.  If we clear age here, SPDK reads
+  // hint=(count=0, age=0), the poll-lite condition `count==0 && age<4`
+  // evaluates true, SPDK early-exits, the host CQ never gets scanned, and
+  // IO completions deadlock.  Letting age tick from the oldest CQE arrival
+  // means SPDK is forced to scan after 4µs (= AGE_THRESHOLD * granularity).
+  // The reset must instead happen when the host actually consumes the CQs
+  // — we approximate "consumed" by the next batch of CQE arrivals which
+  // re-arm hintOldestArrivalTicks via the wasEmpty branch.
 
   // Cancel the timeout event if it was previously armed.
   if (uncoreFlushScheduled) {
@@ -2613,7 +2675,11 @@ uint32_t Controller::getInflightCount(uint16_t qid) const {
 uint32_t Controller::getMultiBitHint() const {
   uint32_t count = uncoreHintReady & 0xFFFFu;
   uint16_t age_units = 0;
-  if (count > 0 && hintOldestArrivalTicks > 0) {
+  // Mechanism #4 (fixed 2026-05-14): report age whenever hintOldestArrivalTicks
+  // is non-zero, regardless of count.  After a flush, count==0 (lCQFIFO empty)
+  // but published CQEs may still be unconsumed in the host DRAM CQ — age must
+  // continue to tick so SPDK is forced to scan once it crosses the threshold.
+  if (hintOldestArrivalTicks > 0) {
     // Mirror the rest of the controller's tick-source convention (getTick()).
     // const-method context: getTick() is a free function in the simplessd
     // simulator interface, so no `this` involved.

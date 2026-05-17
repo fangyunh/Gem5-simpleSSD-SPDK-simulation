@@ -35,6 +35,7 @@
 #include <cassert>
 #include <iostream>
 #include <string>
+#include <typeinfo>
 #include <unordered_map>
 #include <vector>
 
@@ -225,7 +226,19 @@ EventQueue::serviceOne()
         // forward current cycle to the time when this event occurs.
         setCurTick(event->when());
 
-        event->process();
+        // Diagnostic wrapper: when std::bad_function_call or any other
+        // std::exception escapes process(), the pybind11 layer converts it
+        // to a Python RuntimeError that lacks the offending event's name.
+        // Catch here so we can name the event in the log before re-throwing.
+        // See docs/TIMING_CACHES_PREP_PLAN.md §7.
+        try {
+            event->process();
+        } catch (std::exception &e) {
+            warn("EventQueue::serviceOne: exception '%s' thrown while "
+                 "processing event '%s' at tick %lld (type info: %s)",
+                 e.what(), event->name(), curTick(), typeid(*event).name());
+            throw;
+        }
         if (event->isExitEvent()) {
             assert(!event->flags.isSet(Event::Managed) ||
                    !event->flags.isSet(Event::IsMainQueue)); // would be silly

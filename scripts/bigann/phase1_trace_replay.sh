@@ -17,6 +17,12 @@ PCI_ADDR=${PCI_ADDR:-"0000:00:05.0"}
 QPAIRS=${QPAIRS:-1}
 QPAIRS_LIST=(${QPAIRS_LIST:-$QPAIRS})
 
+# Multi-host-core support (2026-05-15).  CORE_COUNTS_LIST is space-separated.
+# Each entry N means: run spdk_nvme_perf with -c <(1<<N)-1> covering cores
+# [0..N-1].  Default "1" preserves prior single-core behavior.
+CORE_COUNTS_LIST=${CORE_COUNTS_LIST:-"1"}
+CORE_COUNTS=(${CORE_COUNTS_LIST})
+
 QUEUE_DEPTHS=(${QUEUE_DEPTHS_LIST:-${QUEUE_DEPTHS:-128}})
 IO_SIZES=(${IO_SIZES_LIST:-${IO_SIZES:-4096}})
 REPEATS=${REPEATS:-1}
@@ -149,8 +155,19 @@ mkdir -p "$OUTPUT_BASE"
 
 # Trace replay schema: same as the multi-core variant minus the Core_Count
 # column. Adds a Trace_Source column documenting which trace was replayed.
-for QPAIRS in "${QPAIRS_LIST[@]}"; do
-    RUN_DIR="$OUTPUT_BASE/core0_qp${QPAIRS}"
+# Outer loop iterates host core counts; inner loop iterates qpairs.  Each
+# (core_count, qpair) pair gets its own output directory.
+for CORE_COUNT in "${CORE_COUNTS[@]}"; do
+  # Mask covering cores [0..CORE_COUNT-1].  e.g. 1->0x1, 6->0x3f, 8->0xff.
+  CORE_MASK=$(printf "0x%x" $(( (1 << CORE_COUNT) - 1 )))
+  echo "[CORES] running core_count=$CORE_COUNT mask=$CORE_MASK"
+  for QPAIRS in "${QPAIRS_LIST[@]}"; do
+    if [ "$CORE_COUNT" -eq 1 ]; then
+        # Preserve legacy single-core naming so old plotters still find data.
+        RUN_DIR="$OUTPUT_BASE/core0_qp${QPAIRS}"
+    else
+        RUN_DIR="$OUTPUT_BASE/core_count${CORE_COUNT}_qp${QPAIRS}"
+    fi
     OUTPUT_FILE="$RUN_DIR/phase1_results.csv"
     LOG_DIR="$RUN_DIR/logs"
     ERROR_LOG="$RUN_DIR/phase1_errors.log"
@@ -158,11 +175,12 @@ for QPAIRS in "${QPAIRS_LIST[@]}"; do
     mkdir -p "$RUN_DIR" "$LOG_DIR"
     > "$ERROR_LOG"
 
-    echo "QD,Qpairs,IO_Size,Run_ID,IOPS,Cycles,Instructions,LLC_Misses,Cycles_Per_IO,Instr_Per_IO,LLC_Misses_Per_IO,p50_Latency,p99_Latency,p99.9_Latency,Polls,Completions,Scans_Per_Completion,Completions_Per_Call,MMIO_Writes_Per_IO,Completions_Per_Poll_Hist,Submit_Logic_ns,Completion_Logic_ns,Submit_Preamble_ns,Tracker_Alloc_ns,Addr_Xlate_ns,Cmd_Construct_ns,Fence_ns,Doorbell_ns,CQE_Detect_ns,Tracker_Lookup_ns,State_Dealloc_ns,State_Dealloc_Library_ns,State_Dealloc_Callback_ns,State_Dealloc_Total_ns,Trace_Source,Trace_Entries" > "$OUTPUT_FILE"
+    echo "QD,Qpairs,IO_Size,Run_ID,IOPS,Cycles,Instructions,LLC_Misses,Cycles_Per_IO,Instr_Per_IO,LLC_Misses_Per_IO,p50_Latency,p99_Latency,p99.9_Latency,Polls,Completions,Scans_Per_Completion,Completions_Per_Call,MMIO_Writes_Per_IO,Completions_Per_Poll_Hist,Submit_Logic_ns,Completion_Logic_ns,Submit_Preamble_ns,Tracker_Alloc_ns,Addr_Xlate_ns,Cmd_Construct_ns,Fence_ns,Doorbell_ns,CQE_Detect_ns,Tracker_Lookup_ns,State_Dealloc_ns,State_Dealloc_Library_ns,State_Dealloc_Callback_ns,State_Dealloc_Total_ns,Trace_Source,Trace_Entries,Core_Count,Core_Mask" > "$OUTPUT_FILE"
 
     echo "========================================================"
     echo "BigANN/DiskANN trace replay"
     echo "Target:    ${PCI_ADDR}"
+    echo "Cores:     $CORE_COUNT  (mask=$CORE_MASK)"
     echo "Qpairs:    $QPAIRS"
     echo "Trace:     $TRACE_FILE  ($(stat -c %s "$TRACE_FILE") bytes / $(($(stat -c %s "$TRACE_FILE")/16)) entries)"
     echo "Output:    $OUTPUT_FILE"
@@ -182,6 +200,19 @@ for QPAIRS in "${QPAIRS_LIST[@]}"; do
     echo "[fingerprint] SPDK_UNCORE_MODE_B = ${SPDK_UNCORE_MODE_B:-unset}"
     echo "========================================================"
 
+    # Checkpoint+switch hook: TAKE_CHECKPOINT=1 makes the guest checkpoint
+    # state right before workload launch.  In a follow-up gem5 run with
+    # --checkpoint-restore=N --restore-with-cpu=TimingSimpleCPU --caches
+    # --l2cache, execution resumes here under the timing CPU model.  Stats
+    # are reset so only the workload contributes to the measurement (cold-
+    # cache mitigation also relies on SPDK's own warmup window).
+    if [ "${TAKE_CHECKPOINT:-0}" = "1" ]; then
+        echo "PHASE1_TRACE_INFO: m5 checkpoint (TAKE_CHECKPOINT=1)"
+        m5 checkpoint || echo "PHASE1_TRACE_WARN: m5 checkpoint failed"
+        m5 dumpresetstats || true
+        echo "PHASE1_TRACE_INFO: post-checkpoint resume"
+    fi
+
     for IO_SIZE in "${IO_SIZES[@]}"; do
         for QD in "${QUEUE_DEPTHS[@]}"; do
             for RUN_ID in $(seq 1 $REPEATS); do
@@ -195,10 +226,28 @@ for QPAIRS in "${QPAIRS_LIST[@]}"; do
                 # -w randread is still required by perf.c's argument
                 # validation, but the --trace-file path overrides the
                 # workload generator -- the trace decides offset/op.
+                # NUMBER_IOS_CAP (optional, env-overridable): additional exit
+                # criteria — perf stops at min(-t, -d).  Useful for bounding
+                # gem5 wall-clock when sim throughput scales (e.g., Mech #4
+                # active produces ~30× more events per sim-second).
+                _D_ARGS=()
+                if [ -n "${NUMBER_IOS_CAP:-}" ] && [ "$NUMBER_IOS_CAP" -gt 0 ] 2>/dev/null; then
+                    _D_ARGS=(-d "$NUMBER_IOS_CAP")
+                fi
+                # -Q 1 (continue-on-error, rate-limited log every 1) is required
+                # for multi-qpair runs at high QD: spdk_nvme_perf sizes the per-
+                # qpair request pool as `2 * ceil(g_queue_depth / nr_qpairs)`,
+                # which is too small (=2..16) for sustained round-robin bursts
+                # at QD>=64 with >=16 qpairs. Without -Q, a transient ENOMEM on
+                # any submit sets ns_ctx->status=1 and the run exits rc=1 with
+                # no CSV written. With -Q the task is queued for retry and the
+                # measurement still completes (added 2026-05-14).
                 SPDK_CMD_RUN=("$SPDK_PERF_BIN" -r "trtype:PCIe traddr:$PCI_ADDR" \
                     -w randread -o "$IO_SIZE" -q "$QD" -t "$STEADY_TIME" \
-                    -c 0x1 -P "$QPAIRS" -L --transport-stats \
+                    -c "$CORE_MASK" -P "$QPAIRS" -L --transport-stats \
+                    -Q 1 \
                     --trace-file "$TRACE_FILE" \
+                    "${_D_ARGS[@]}" \
                     "${SPDK_EAL_ARGS[@]}")
 
                 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"$SPDK_DIR/build/lib"
@@ -341,12 +390,13 @@ EOF
                 TRACE_ENTRIES=$(($(stat -c %s "$TRACE_FILE") / 16))
 
                 echo "Done. ($IOPS IOPS)"
-                CSV_LINE="$QD,$QPAIRS,$IO_SIZE,$RUN_ID,$IOPS,$CYCLES,$INSTR,$LLC,$CYC_PER_IO,$INSTR_PER_IO,$LLC_PER_IO,$P50,$P99,$P999,$POLLS,$COMPLETIONS,$SCANS_PER,$COMPLETIONS_PER,$MMIO_PER,$CPPHIST,$SUBMIT_NS,$COMPLETE_NS,$PREAMBLE_NS,$TR_ALLOC_NS,$XLATE_NS,$CMD_NS,$FENCE_NS,$DB_NS,$CQE_NS,$TR_LOOKUP_NS,$FREE_NS,$FREE_LIB_NS,$FREE_CB_NS,$FREE_TOTAL_NS,$TRACE_BASENAME,$TRACE_ENTRIES"
+                CSV_LINE="$QD,$QPAIRS,$IO_SIZE,$RUN_ID,$IOPS,$CYCLES,$INSTR,$LLC,$CYC_PER_IO,$INSTR_PER_IO,$LLC_PER_IO,$P50,$P99,$P999,$POLLS,$COMPLETIONS,$SCANS_PER,$COMPLETIONS_PER,$MMIO_PER,$CPPHIST,$SUBMIT_NS,$COMPLETE_NS,$PREAMBLE_NS,$TR_ALLOC_NS,$XLATE_NS,$CMD_NS,$FENCE_NS,$DB_NS,$CQE_NS,$TR_LOOKUP_NS,$FREE_NS,$FREE_LIB_NS,$FREE_CB_NS,$FREE_TOTAL_NS,$TRACE_BASENAME,$TRACE_ENTRIES,$CORE_COUNT,$CORE_MASK"
                 echo "$CSV_LINE" >> "$OUTPUT_FILE"
             done
         done
     done
-done
+  done   # end QPAIRS loop
+done     # end CORE_COUNT loop
 
 echo "========================================================"
 echo "Trace replay complete. Results saved under: $OUTPUT_BASE"

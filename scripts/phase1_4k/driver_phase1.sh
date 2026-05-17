@@ -613,6 +613,34 @@ patch_ssd_config() {
     -e "s|^(DBBatchB)[[:space:]]*=.*|\1       = $DB_BATCH_B|" \
     "$cfg"
   echo "Patched SSD config: $cfg [UncoreMode=$UNCORE_MODE CQBatchN=$CQ_BATCH_N CQBatchT=$CQ_BATCH_T DBBatchB=$DB_BATCH_B]"
+
+  # --- Multi-qpair validation (2026-05-14) -----------------------------------
+  # SimpleSSD advertises MaxIOCQueue I/O queues in CAP.  If the driver/host
+  # tries to create more, qpair creation just silently fails and the test runs
+  # with fewer qpairs than requested.  Catch that here, before launching gem5.
+  local max_io_cq
+  max_io_cq=$(awk -F= '/^[[:space:]]*MaxIOCQueue[[:space:]]*=/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' "$cfg")
+  if [ -z "$max_io_cq" ]; then
+    echo "WARNING: could not parse MaxIOCQueue from $cfg; skipping qpair validation." >&2
+    return 0
+  fi
+  local cores_count
+  cores_count=$(echo "$CORE_MASKS" | wc -w)
+  [ "$cores_count" -eq 0 ] && cores_count=1
+  local max_qpairs_per_core=1
+  local q
+  for q in $QPAIRS; do
+    if [ "$q" -gt "$max_qpairs_per_core" ]; then
+      max_qpairs_per_core="$q"
+    fi
+  done
+  local needed=$(( cores_count * max_qpairs_per_core ))
+  echo "[QPAIR] cfg=$cfg MaxIOCQueue=$max_io_cq cores=$cores_count qpairs_per_core_list=\"$QPAIRS\" max_per_core=$max_qpairs_per_core uncore_mode=$UNCORE_MODE total_needed=$needed"
+  if [ "$needed" -gt "$max_io_cq" ]; then
+    echo "ERROR: requested cores*max(qpairs_per_core) = $cores_count*$max_qpairs_per_core = $needed exceeds cfg MaxIOCQueue=$max_io_cq." >&2
+    echo "       Bump MaxIOCQueue/MaxIOSQueue in $cfg (BAR0 layout supports up to 128 with current freeCidBase=0x4000)." >&2
+    exit 2
+  fi
 }
 
 run_auto() {

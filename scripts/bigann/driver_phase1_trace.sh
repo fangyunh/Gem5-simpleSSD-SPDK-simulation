@@ -41,6 +41,29 @@ QD_LIST="128"
 IO_SIZES="4096"
 REPEATS=1
 STEADY_TIME=1
+# Multi-host-core support (2026-05-15): space-separated list of host CPU
+# counts to sweep, e.g. "1 6 8".  Each entry boots gem5 with that many guest
+# CPUs and runs spdk_nvme_perf on a mask spanning all of them.  Default 1
+# preserves prior single-core behavior.
+CORE_COUNTS_LIST="1"
+
+# Host CPU model + caches (2026-05-15): switch to TimingSimpleCPU + L1/L2
+# caches to model multi-core scaling realistically.  Default keeps the fast
+# AtomicSimpleCPU, no caches.  See docs/TIMING_CACHES_PREP_PLAN.md.
+CPU_TYPE="AtomicSimpleCPU"
+ENABLE_CACHES=0
+ENABLE_L2_CACHE=1
+# Checkpoint+switch (option 3): take a checkpoint right before workload (phase 1
+# atomic boot, fast) then in a follow-up run restore with TimingSimpleCPU+caches
+# to measure under the realistic timing model without paying the multi-CPU
+# timing-mode boot tax.  See docs/TIMING_CACHES_PREP_PLAN.md §7.
+TAKE_CHECKPOINT=0
+CHECKPOINT_RESTORE_N=""
+# When CHECKPOINT_RESTORE_N is set and RESTORE_WITH_CPU differs from CPU_TYPE,
+# gem5 boots its devices with CPU_TYPE (must match the checkpoint's CPU) and
+# switches to RESTORE_WITH_CPU on restore.  Typical use: CPU_TYPE=AtomicSimpleCPU,
+# RESTORE_WITH_CPU=TimingSimpleCPU.
+RESTORE_WITH_CPU=""
 RUN_TAG="trace_$(date +%Y%m%d_%H%M%S)"
 
 PCI_ADDR="0000:00:05.0"
@@ -83,6 +106,18 @@ Options (auto mode only):
   --auto-stop 0|1         Auto-stop gem5 when sweep completes (default: $AUTO_STOP)
 
   --qpairs "list"         Per-thread qpairs (default: "$QPAIRS_LIST")
+  --core-counts "list"    Host CPU counts to sweep (default: "$CORE_COUNTS_LIST")
+                          Each value N boots gem5 with N guest CPUs and runs
+                          spdk_nvme_perf with -c <(1<<N)-1> covering them.
+  --cpu-type TYPE         Guest CPU model (default: $CPU_TYPE).
+                          Common: AtomicSimpleCPU (fast) | TimingSimpleCPU
+                          (realistic memory timing — use with --caches).
+  --caches 0|1            Enable per-CPU L1I+L1D + shared L2 (default: $ENABLE_CACHES).
+                          Only meaningful with --cpu-type TimingSimpleCPU.
+  --l2 0|1                Enable shared L2 cache (default: $ENABLE_L2_CACHE).
+                          Set to 0 to run L1-only (workaround for the
+                          multi-CPU+L2+TimingSimpleCPU bad_function_call
+                          crash; see docs/TIMING_CACHES_PREP_PLAN.md).
   --qd "list"             Queue depths (default: "$QD_LIST")
   --ios "list"            IO sizes (default: "$IO_SIZES")
   --repeats N             Repeats per data point (default: $REPEATS)
@@ -134,6 +169,13 @@ while [[ $# -gt 0 ]]; do
         --auto) AUTO=1; shift ;;
         --auto-stop) AUTO_STOP="$2"; shift 2 ;;
         --qpairs) QPAIRS_LIST="$2"; shift 2 ;;
+        --core-counts) CORE_COUNTS_LIST="$2"; shift 2 ;;
+        --cpu-type) CPU_TYPE="$2"; shift 2 ;;
+        --caches) ENABLE_CACHES="$2"; shift 2 ;;
+        --l2) ENABLE_L2_CACHE="$2"; shift 2 ;;
+        --take-checkpoint) TAKE_CHECKPOINT="$2"; shift 2 ;;
+        --restore-checkpoint) CHECKPOINT_RESTORE_N="$2"; shift 2 ;;
+        --restore-with-cpu) RESTORE_WITH_CPU="$2"; shift 2 ;;
         --qd) QD_LIST="$2"; shift 2 ;;
         --ios) IO_SIZES="$2"; shift 2 ;;
         --repeats) REPEATS="$2"; shift 2 ;;
@@ -207,6 +249,27 @@ patch_ssd_config() {
         "$SSD_CONFIG"
     echo "Patched $SSD_CONFIG: UncoreMode=$UNCORE_MODE CQBatchN=$CQ_BATCH_N CQBatchT=$CQ_BATCH_T DBBatchB=$DB_BATCH_B" \
         | tee -a "$LOG_FILE"
+
+    # --- Multi-qpair + multi-core validation (2026-05-15) ----------------------
+    # With CORE_COUNTS_LIST sweeping host CPU counts, the total qpair pressure on
+    # the device is max_core * max_qpairs_per_core.  Must be <= MaxIOCQueue.
+    local max_io_cq
+    max_io_cq=$(awk -F= '/^[[:space:]]*MaxIOCQueue[[:space:]]*=/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' "$SSD_CONFIG")
+    if [ -n "$max_io_cq" ]; then
+        local max_qp=1 q max_cc=1 c
+        for q in $QPAIRS_LIST; do
+            [ "$q" -gt "$max_qp" ] && max_qp="$q"
+        done
+        for c in $CORE_COUNTS_LIST; do
+            [ "$c" -gt "$max_cc" ] && max_cc="$c"
+        done
+        local needed=$(( max_cc * max_qp ))
+        echo "[QPAIR] cfg=$SSD_CONFIG MaxIOCQueue=$max_io_cq qpairs_list=\"$QPAIRS_LIST\" core_counts_list=\"$CORE_COUNTS_LIST\" max_per_core=$max_qp max_cores=$max_cc total_needed=$needed uncore_mode=$UNCORE_MODE" | tee -a "$LOG_FILE"
+        if [ "$needed" -gt "$max_io_cq" ]; then
+            echo "ERROR: max_cores*max(qpairs_per_core) = $max_cc*$max_qp = $needed exceeds cfg MaxIOCQueue=$max_io_cq." | tee -a "$LOG_FILE" >&2
+            exit 2
+        fi
+    fi
 }
 
 write_metadata() {
@@ -220,6 +283,10 @@ write_metadata() {
   "trace_guest":    "$TRACE_FILE_GUEST",
   "trace_size_bytes": $(stat -c %s "$TRACE_FILE_HOST"),
   "qpairs":         "$QPAIRS_LIST",
+  "core_counts":    "$CORE_COUNTS_LIST",
+  "cpu_type":       "$CPU_TYPE",
+  "enable_caches":  $ENABLE_CACHES,
+  "enable_l2_cache": $ENABLE_L2_CACHE,
   "queue_depths":   "$QD_LIST",
   "io_sizes":       "$IO_SIZES",
   "repeats":        $REPEATS,
@@ -301,6 +368,7 @@ HOST_SHARE="__HOST_SHARE__"
   ulimit -l unlimited 2>/dev/null || true
 
   export QPAIRS_LIST="__QPAIRS__"
+  export CORE_COUNTS_LIST="__CORE_COUNTS__"
   export QUEUE_DEPTHS_LIST="__QD_LIST__"
   export IO_SIZES_LIST="__IO_SIZES__"
   export REPEATS=__REPEATS__
@@ -314,6 +382,8 @@ HOST_SHARE="__HOST_SHARE__"
   export HUGEMEM_MB=__HUGEMEM_MB__
   export UNCORE_MODE=__UNCORE_MODE__
   export TRACE_FILE="__TRACE_FILE_GUEST__"
+  export NUMBER_IOS_CAP=__NUMBER_IOS_CAP__
+  export TAKE_CHECKPOINT=__TAKE_CHECKPOINT__
 
   ./scripts/bigann/phase1_trace_replay.sh
   echo "PHASE1_TRACE_INFO: output_root=$OUTPUT_ROOT"
@@ -337,10 +407,12 @@ EOF
         -e "s|__REPO_CANDIDATES__|$GUEST_REPO_CANDIDATES|g" \
         -e "s|__HOST_SHARE__|$HOST_SHARE|g" \
         -e "s|__QPAIRS__|$QPAIRS_LIST|g" \
+        -e "s|__CORE_COUNTS__|$CORE_COUNTS_LIST|g" \
         -e "s|__QD_LIST__|$QD_LIST|g" \
         -e "s|__IO_SIZES__|$IO_SIZES|g" \
         -e "s|__REPEATS__|$REPEATS|g" \
         -e "s|__STEADY_TIME__|$STEADY_TIME|g" \
+        -e "s|__NUMBER_IOS_CAP__|${NUMBER_IOS_CAP:-0}|g" \
         -e "s|__RUN_TAG__|$RUN_TAG|g" \
         -e "s|__OUTPUT_ROOT__|$GUEST_OUTPUT_ROOT|g" \
         -e "s|__PCI_ADDR__|$PCI_ADDR|g" \
@@ -350,6 +422,7 @@ EOF
         -e "s|__HUGEMEM_MB__|$HUGEMEM_MB|g" \
         -e "s|__UNCORE_MODE__|$UNCORE_MODE|g" \
         -e "s|__TRACE_FILE_GUEST__|$TRACE_FILE_GUEST|g" \
+        -e "s|__TAKE_CHECKPOINT__|$TAKE_CHECKPOINT|g" \
         "$script_path"
 
     chmod +x "$script_path"
@@ -387,8 +460,16 @@ run_auto() {
     READFILE_SCRIPT=$(write_readfile_script)
     echo "Readfile: $READFILE_SCRIPT" | tee -a "$LOG_FILE"
 
+    # Pick the max core count from CORE_COUNTS_LIST so gem5 boots with enough
+    # guest CPUs to cover any -c <mask> the replay script will use.
+    _NUM_CPUS=1
+    for _c in $CORE_COUNTS_LIST; do
+        if [ "$_c" -gt "$_NUM_CPUS" ]; then _NUM_CPUS="$_c"; fi
+    done
+    echo "[CORES] booting gem5 with NUM_CPUS=$_NUM_CPUS (covers core_counts=\"$CORE_COUNTS_LIST\") cpu_type=$CPU_TYPE caches=$ENABLE_CACHES l2=$ENABLE_L2_CACHE" | tee -a "$LOG_FILE"
+
     tmux_cmd new-session -d -s "$SESSION_NAME" -n boot \
-        "bash -lc \"KERNEL=$KERNEL DISK_IMAGE=$DISK_IMAGE MEM_SIZE=$MEM_SIZE SSD_CONFIG=$SSD_CONFIG CHECKPOINT_DIR=$CHECKPOINT_DIR READFILE_SCRIPT=$READFILE_SCRIPT VIO_9P=1 VIO_9P_SET_ROOT=1 HOST_SHARE='$HOST_SHARE' $SHARED_SCRIPTS_DIR/boot_gem5.sh start; echo 'boot_gem5.sh exited'; exec bash\""
+        "bash -lc \"KERNEL=$KERNEL DISK_IMAGE=$DISK_IMAGE MEM_SIZE=$MEM_SIZE SSD_CONFIG=$SSD_CONFIG CHECKPOINT_DIR=$CHECKPOINT_DIR CHECKPOINT_RESTORE='$CHECKPOINT_RESTORE_N' RESTORE_WITH_CPU='$RESTORE_WITH_CPU' READFILE_SCRIPT=$READFILE_SCRIPT VIO_9P=1 VIO_9P_SET_ROOT=1 HOST_SHARE='$HOST_SHARE' NUM_CPUS=$_NUM_CPUS CPU_TYPE='$CPU_TYPE' ENABLE_CACHES=$ENABLE_CACHES ENABLE_L2_CACHE=$ENABLE_L2_CACHE TAKE_CHECKPOINT=$TAKE_CHECKPOINT $SHARED_SCRIPTS_DIR/boot_gem5.sh start; echo 'boot_gem5.sh exited'; exec bash\""
     tmux_cmd pipe-pane -t "$SESSION_NAME:0.0" -o "cat >> '$LOG_FILE'"
     tmux_cmd set-option -t "$SESSION_NAME" remain-on-exit on
 
@@ -413,9 +494,21 @@ run_auto() {
 
     while true; do
         if grep -q "PHASE1_RUNSCRIPT_DONE" "$LOG_FILE" 2>/dev/null; then
-            echo "[$(date '+%H:%M:%S')] Sweep complete. Stopping gem5..."
-            sleep 3
-            "$SHARED_SCRIPTS_DIR/boot_gem5.sh" stop >> "$LOG_FILE" 2>&1 || true
+            echo "[$(date '+%H:%M:%S')] Sweep complete. Waiting up to 120s for guest m5 exit to flush stats..."
+            _STATS_WAIT=0
+            _GEM5_PID_LOCAL=$(cat "$_GEM5_PID_FILE" 2>/dev/null)
+            while [ "$_STATS_WAIT" -lt 120 ]; do
+                if [ -n "$_GEM5_PID_LOCAL" ] && ! kill -0 "$_GEM5_PID_LOCAL" 2>/dev/null; then
+                    echo "[$(date '+%H:%M:%S')] gem5 exited cleanly via m5 exit."
+                    break
+                fi
+                sleep 2
+                _STATS_WAIT=$(( _STATS_WAIT + 2 ))
+            done
+            if [ -n "$_GEM5_PID_LOCAL" ] && kill -0 "$_GEM5_PID_LOCAL" 2>/dev/null; then
+                echo "[$(date '+%H:%M:%S')] m5 exit didn't fire within 120s; falling back to SIGTERM."
+                "$SHARED_SCRIPTS_DIR/boot_gem5.sh" stop >> "$LOG_FILE" 2>&1 || true
+            fi
             tmux_cmd kill-session -t "$SESSION_NAME" >> "$LOG_FILE" 2>&1 || true
             break
         fi

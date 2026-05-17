@@ -1,0 +1,32 @@
+Warning 168: run_sta.tcl line 1, unknown field nets.
+Warning 502: run_sta.tcl line 1, report_checks -endpoint_count is deprecated. Use -endpoint_path_count instead.
+Warning 503: run_sta.tcl line 1, report_checks -group_count is deprecated. Use -group_path_count instead.
+Startpoint: _184151_ (rising edge-triggered flip-flop clocked by clk)
+Endpoint: _184151_ (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: min
+
+     Cap     Slew    Delay     Time   Description
+---------------------------------------------------------------------------
+           20.000    0.000    0.000   clock clk (rise edge)
+                     0.000    0.000   clock network delay (ideal)
+           20.000    0.000    0.000 ^ _184151_/CLK (DFFASRHQNx1_ASAP7_75t_R)
+   0.465   16.497   54.522   54.522 ^ _184151_/QN (DFFASRHQNx1_ASAP7_75t_R)
+   0.484   13.912   11.752   66.274 v _167774_/Y (NAND2xp33_ASAP7_75t_R)
+           13.912    0.000   66.274 v _184151_/D (DFFASRHQNx1_ASAP7_75t_R)
+                             66.274   data arrival time
+
+           20.000    0.000    0.000   clock clk (rise edge)
+                     0.000    0.000   clock network delay (ideal)
+                    50.000   50.000   clock uncertainty
+                     0.000   50.000   clock reconvergence pessimism
+                             50.000 ^ _184151_/CLK (DFFASRHQNx1_ASAP7_75t_R)
+                    14.969   64.969   library hold time
+                             64.969   data required time
+---------------------------------------------------------------------------
+                             64.969   data required time
+                            -66.274   data arrival time
+---------------------------------------------------------------------------
+                              1.305   slack (MET)
+
+

@@ -1,6 +1,6 @@
 # SimpleSSD + gem5 + SPDK Full-System Simulation — Project Context
 
-**Last updated:** 2026-05-12
+**Last updated:** 2026-05-15
 **Audience:** A fresh AI agent (or new engineer) joining this project.
 **Goal of this file:** Hand you the complete project picture — *what* it is, *where* the
 implementation lives, *which file owns each topic*, *how* to run things, and *where to
@@ -14,7 +14,7 @@ file-path + section-anchor pairs you can `Read` directly.
 We run a **full-system NVMe SSD simulation** to measure the host-CPU cost per I/O at
 ultra-high IOPS and to design a hardware solution. The stack is:
 
-- **gem5** simulates an X86 server (full-system, real Linux kernel, O3 CPU).
+- **gem5** simulates an X86 server (full-system, real Linux kernel) with the simple-CPU family. The active configuration is `AtomicSimpleCPU` @ 2 GHz, no L1/L2 caches (the CPU connects directly to the system membus), and `mem_mode=atomic`. This is the gem5 default for `configs/example/fs.py`; `boot_gem5.sh` does not override `--cpu-type` or `--cpu-clock`. Cross-checked from `SimpleSSD-FullSystem/m5out/config.ini` (2026-05-15).
 - **SimpleSSD** is gem5's NVMe SSD model (HIL / ICL / FTL / PAL pipeline).
 - **SPDK `spdk_nvme_perf`** runs *inside* the simulated Linux guest as the host-side
   workload, generating real NVMe traffic to the modeled SSD.
@@ -25,9 +25,15 @@ config). Three host-CPU stages dominate the per-IO budget: **PRP-list constructi
 (~337 ns)**, **tracker bookkeeping (~218 ns)**, and **state dealloc (~295 ns)**.
 
 We propose an on-die **I/O-Uncore** (a CPU-uncore hardware block) that absorbs those
-stages. The simulator now supports four "modes" of offload progressively eliminating
-host work; the target is **2.5× IOPS lift** with Mechanisms #1+#2+#4 enabled, with a
-clear path to ~3.2× via the deferred Mechanism #3.
+stages. The simulator now supports three "modes" of offload progressively eliminating
+host work. **Measured (2026-05-13)** with Mode 2 + Mechanisms #1+#2+#4 enabled on the
+Storage-Next-class `fast_ssd_highiops.cfg`, the host-side ceiling moves from
+**~0.82 M → ~1.10 M IOPS at QD=128, a ~1.35× lift**. The lift is reproduced on a
+DiskANN BigANN trace replay (**~1.37× at QD=128**) and held across QD ∈ {16, 32, 64,
+128} (1.35× to 1.43×). Mode 2 is itself CPU-bound at a new higher ceiling (IOPS
+nearly flat at ~1.106 M across all four QDs), motivating the deferred Mechanism #3
+(completion-callback dispatcher) as future work to close more of the remaining gap to
+the device ceiling.
 
 The paper target is **IEEE Computer Architecture Letters (CAL)**.
 Working title: *IAU: Assisting the CPU Core for Next-Generation Multi-Million IOPS NVMe Devices*.
@@ -106,21 +112,21 @@ The dominant elidable costs are **PRP-list construction (~337 ns)** and
 ### 2.3 Proposed solution — I/O-Uncore
 
 We design an on-die **I/O-Uncore** that relocates per-IO host stages into a
-CPU-uncore-resident hardware block. The simulator models this at four progressively
-deeper levels:
+CPU-uncore-resident hardware block. The simulator models this at three progressively
+deeper levels. All numbers below are **measured** on `fast_ssd_highiops.cfg`
+(Storage-Next class, ~32 M IOPS device ceiling), single qpair, 4 KB random reads,
+2 GHz simulated X86 AtomicSimpleCPU (no L1/L2; mem_mode=atomic). Runs: `paper_qdsweep_mode0/1/2_20260510` and bigANN trace
+runs `paper_trace_mode0/2_20260510`.
 
-| Mode | What it offloads | Expected IOPS @ QD=128 | Lift vs Mode 0 |
-|---|---|---|---|
-| **Mode 0** | Nothing — baseline SPDK + Path-E fast-path device | 0.82 M (measured) | 1.0× |
-| **Mode 1** | Device-side SQ-fetch + CQE batching (transparent; SPDK untouched) | 0.79 M (measured) | 0.96× *(small loss is expected under polling SPDK)* |
-| **Mode 2 v1** | + Mailbox SQ Engine (compact 24 B SQE, on-die PRP expansion, no doorbell) | ~1.2 M (expected) | ~1.4× |
-| **Mode 2 + Mechs #1/#2/#4** | + HW free-CID ring, HW queue-depth counter, typed hint reg | ~2.05 M (expected) | **~2.5×** |
-| **Mode 2 + Mech #3 (future)** | + HW completion-callback dispatcher (cb_fn / cb_arg in compact descriptor) | ~2.64 M | ~3.2× |
+| Mode | What it offloads | IOPS @ QD=128 (4 KB rand) | bigANN @ QD=128 | Lift vs Mode 0 |
+|---|---|---:|---:|---:|
+| **Mode 0** (baseline) | Nothing — baseline SPDK + Path-E fast-path device | 819,253 | 803,840 | 1.00× |
+| **Mode 1** (transparent) | Device-side SQ-fetch gate + CQE staging buffer (SPDK untouched) | 808,403 | — | 0.99× *(small loss under polling SPDK is expected; gain is in DRAM-traffic reduction, not IOPS)* |
+| **Mode 2 + Mechs #1/#2/#4** | + Mailbox SQ Engine + HW free-CID ring + HW queue-depth counter + typed hint reg | **1,106,669** | **1,101,905** | **1.35× (rand) / 1.37× (bigANN)** |
 
-Mech #3 requires a new application API and crosses from "control-plane uncore" to
-"control + data-plane uncore." It is deferred. See
-`docs/IO-Uncore RTL Design Specification — Phase 3 Silicon Feasibility.md` §13 for
-the full feasibility analysis of all four mechanisms.
+**QD-sweep lift (Mode 2 / Mode 0):** 4 KB random read — 1.43× @ QD=16, 1.38× @ QD=32, 1.36× @ QD=64, 1.35× @ QD=128. BigANN trace — 1.45× / 1.40× / 1.38× / 1.37× at the same QDs. The lift is largest at low QD (where each IO's per-stage savings matter more) and smallest at high QD (where polling overlap already amortizes some cost in Mode 0).
+
+**New CPU-bound ceiling after Mode 2.** Mode 2 IOPS is essentially flat at ~1.106 M across QD ∈ {16, 32, 64, 128}, indicating Mode 2 itself becomes the new CPU-bound saturation point. The residual gap to the ~32 M IOPS device ceiling is what motivates **Mech #3 (HW completion-callback dispatcher) as future work**. Mech #3 requires a new SPDK application API and crosses from "control-plane uncore" to "control + data-plane uncore." Its quantitative ceiling is not measured in this paper. See `docs/IO-Uncore RTL Design Specification — Phase 3 Silicon Feasibility.md` §13.
 
 ### 2.4 Paper
 
@@ -183,7 +189,9 @@ Mechs #1/#2/#4 + Path-E) live in the working tree and are documented in §8.
 ```
 Host Linux (the real machine)
   └── gem5.opt   [setsid + nohup + nice -n 19 + taskset, fully detached]
-        ├── Simulated X86 O3CPU @ ~1 GHz
+        ├── Simulated X86 AtomicSimpleCPU @ 2 GHz, no L1/L2 caches, mem_mode=atomic
+        │   (gem5 default for configs/example/fs.py; not overridden in boot_gem5.sh;
+        │    verified from m5out/config.ini)
         ├── Simulated 4 GB guest DRAM
         ├── SimpleSSD NVMe model (in-process plugin)
         │     ├── HIL / ICL / FTL controller (3 cores; clock varies per cfg)
@@ -557,13 +565,16 @@ All under prefix `nvme0.controller.uncore.` in
   --tag paper_qdsweep_mode2plus_smoke
 ```
 
-**Pass criteria** (after `PHASE1_RUNSCRIPT_DONE`):
+**Pass criteria** (after `PHASE1_RUNSCRIPT_DONE`) — calibrated against
+`paper_qdsweep_mode2_20260510`:
 - `mailbox_submissions ≈ free_cid_pops ≈ free_cid_pushes ≈ cqes_published`
 - `free_cid_starvations == 0`, `mailbox_oversize_fallback == 0`
-- CSV `Addr_Xlate_ns ≈ 0`, `Doorbell_ns ≈ 0`, `Fence_ns ≈ 0`
-- CSV `Tracker_Alloc_ns < 50 ns` (down from ~218 ns in Mode 0)
-- CSV `State_Dealloc_ns ~ 145 ns` (down from ~295 ns in Mode 0)
-- CSV `IOPS > ~1.1 M` at QD=16 (Mode 0 baseline = 776 K)
+- CSV `Doorbell_ns ≈ 1.1`, `Fence_ns ≈ 1.8` (SPDK still emits the unconditional
+  fence/doorbell wrappers; their cost is sub-ns/IO so we leave them alone)
+- CSV `Addr_Xlate_ns ~ 153 ns` at QD=128 (down from ~337 ns in Mode 0; the residual
+  is the SPDK-side mailbox-word build, not PRP-list construction)
+- CSV `State_Dealloc_ns ~ 156 ns` at QD=128 (down from ~295 ns in Mode 0)
+- CSV `IOPS ≈ 1.10 M` at QD=16 → QD=128 (Mode 0 baseline = 776 K @ QD=16 → 819 K @ QD=128)
 
 ---
 

@@ -58,6 +58,8 @@ This spec covers the **first sub-project**: SQ Engine, CQ Engine, and Doorbell C
 
 **Corner:** TT (typical-typical) for nominal results. Optionally SS (slow-slow) for worst-case timing margin.
 
+**Note on the SSD-side timing model used for Phase 2/3 validation.** The behavioral validation runs that this RTL spec depends on (Section 10.2) are produced by gem5 + SimpleSSD with the *Path E NVMeVirt-style fast-path* enabled (`fastPathEnabled=1`, see `docs/PATH_E_FAST_PATH_PLAN.md`). Path E replaces SimpleSSD's per-stage HIL/ICL/FTL/PAL event chain with a published-precedent aggregate timing model (NVMeVirt [Kim et al., FAST '23]; SwarmIO [KAIST '26]; FEMU [Li et al., FAST '18]). All host-side IO-Uncore mechanisms — BAR0+0x2000 hint register, `aggregationMap`, `uncorePendingCQE`, mailbox path — continue to fire on the cycle-accurate path. This is the configuration the RTL is validated against; the SSD-internal pipeline modeling is intentionally abstracted because the IO-Uncore design does not measure or claim about it.
+
 ### 2.2 Target Clock Frequency: 1 GHz
 
 **Why 1 GHz:**
@@ -67,7 +69,7 @@ This spec covers the **first sub-project**: SQ Engine, CQ Engine, and Doorbell C
 - Matches the gem5 system clock domain (1 GHz default) where the NVMe device model already resides.
 - Single clock domain — no clock domain crossing (CDC) logic needed, simplifying both RTL and verification.
 
-**Note:** The gem5 CPU clock should be updated from the default 2 GHz to 5 GHz to match modern CPU specifications. This is a separate action item for the simulation configuration.
+**Note on the host CPU clock (resolution of action item §13 #1):** The Phase-2 gem5 baselines used in this spec are produced at the **current gem5 default 2 GHz** (`boot_gem5.sh`, `fs.py`). 5 GHz is the *deployment target* the IO-Uncore RTL is designed for (Intel/AMD modern cores), not the simulation clock. **We do not re-run the Phase-2 sweeps at 5 GHz**; instead, the paper figures present 2 GHz cycle counts as-measured, and project the 5 GHz wall-clock-throughput numbers by scaling the cycle budget (raw cycles/IO are clock-rate invariant; only the wall-clock/IO derived metrics scale). This avoids invalidating every prior smoke and overnight run.
 
 ### 2.3 HDL: Verilog-2001
 
@@ -97,7 +99,7 @@ Three independent engines (SQ Engine, CQ Engine, Doorbell Coalescer) each with t
 ### 3.2 Block Diagram
 
 ```
- Host CPU Core (5 GHz)
+ Host CPU Core (deployment target 5 GHz; gem5 sim 2 GHz — §2.2)
  ┌──────────────────────────────────────────────────────────────────┐
  │  SPDK (userspace)                                               │
  │  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐  │
@@ -106,12 +108,16 @@ Three independent engines (SQ Engine, CQ Engine, Doorbell Coalescer) each with t
  │  └──────┬───────┘  └──────┬───────┘  └──────────┬────────────┘  │
  └─────────┼─────────────────┼─────────────────────┼───────────────┘
            │                 │                     │
- ══════════╪═════════════════╪═════════════════════╪════ PCIe BAR0
+ ══════════╪═════════════════╪═════════════════════╪════ PCIe BAR0 (32 KiB)
            │                 │                     │
  ┌─────────▼─────────────────▼─────────────────────▼───────────────┐
  │                    MMIO Decoder                                  │
  │       (Address decode: 0x0000-0x0FFF -> NVMe std regs           │
- │        0x1000-0x1FFF -> Doorbells,  0x2000+ -> Uncore)          │
+ │        0x1000-0x1FFF -> Doorbells (-> DB Coalescer)             │
+ │        0x2000-0x2FFF -> UNCORE_STATUS hint register             │
+ │        0x3000-0x3FFF -> Mailbox compact SQE (-> SQ Engine)      │
+ │        0x4000-0x7FFF -> FreeCIDBase per qpair (Mech-1)          │
+ │        BAR0 size: 32 KiB)                                       │
  └──────┬──────────────────┬──────────────────┬────────────────────┘
         │                  │                  │
         v                  v                  v
@@ -154,7 +160,7 @@ Three independent engines (SQ Engine, CQ Engine, Doorbell Coalescer) each with t
 | Module | Verilog File | Key Parameters | Description |
 |--------|-------------|----------------|-------------|
 | `io_uncore_top` | `io_uncore_top.v` | `NUM_QUEUES`, `QUEUE_DEPTH`, `CREDITS_MAX` | Top-level wrapper, instantiates all sub-modules |
-| `mmio_decoder` | `mmio_decoder.v` | `ADDR_WIDTH`, `DATA_WIDTH` | Address decode, routes MMIO reads/writes to engines |
+| `mmio_decoder` | `mmio_decoder.v` | `ADDR_WIDTH`, `DATA_WIDTH` | Address decode (BAR0 32 KiB): 0x0000–0x0FFF NVMe std, 0x1000–0x1FFF doorbells, 0x2000–0x2FFF UNCORE_STATUS, 0x3000–0x3FFF mailbox, 0x4000–0x7FFF FreeCIDBase per-qpair (Mech-1). |
 | `sq_engine` | `sq_engine.v` | `NUM_QUEUES`, `QUEUE_DEPTH`, `SQE_WIDTH=512` | Mailbox ingestion, SQE decode, PRP expansion |
 | `cq_engine` | `cq_engine.v` | `NUM_QUEUES`, `QUEUE_DEPTH`, `BATCH_N`, `BATCH_T` | CQE batching, N/T flush, hint register |
 | `db_coalescer` | `db_coalescer.v` | `NUM_QUEUES`, `COALESCE_COUNT`, `TIMEOUT_CYCLES` | Doorbell aggregation with count/timer triggers |
@@ -679,8 +685,8 @@ Total SRAM:    NQ x (QD x (64 + 16 + MPE x 8) + 64)
 
 | Config | SRAM bits | SRAM area (mm^2) | Notes |
 |--------|-----------|-------------------|-------|
-| A (16QP/QD64) | 2,695,168 | ~0.109 | Matches gem5 simulation config |
-| B (64QP/QD64) | 10,780,672 | ~0.437 | Production queue count |
+| A (16QP/QD64) | 2,695,168 | ~0.109 | Legacy pre-2026-05-14 gem5 config; scaling reference |
+| B (64QP/QD64) | 10,780,672 | ~0.437 | **Current gem5-match** (MaxIOCQueue/SQueue=64 after BAR0 relayout) |
 | C (16QP/QD128) | 5,382,144 | ~0.218 | Deep queue depth |
 | D (64QP/QD128) | 21,528,576 | ~0.872 | Full production scale |
 
@@ -764,7 +770,7 @@ Array of 64-bit saturating counters. Each counter increments on its correspondin
 
 ### 10.1 Strategy: Self-Checking Directed Testbenches
 
-**Why not UVM:** This is a feasibility study, not a tapeout. The RTL serves two purposes: (1) prove the control logic is synthesizable and meets timing at 1 GHz, (2) generate credible PPA numbers. The behavioral correctness of the IO-Uncore algorithms has already been validated through Phase 1 baseline measurements and Phase 2 Mode A + Mode B gem5 full-system simulation with real SPDK workloads across hundreds of hours of simulation.
+**Why not UVM:** This is a feasibility study, not a tapeout. The RTL serves two purposes: (1) prove the control logic is synthesizable and meets timing at 1 GHz, (2) generate credible PPA numbers. The behavioral correctness of the IO-Uncore algorithms has been validated at the Mode A level (cycle-accurate full-system gem5 + SimpleSSD); Mode B (mailbox / typed hint) and the Mode-0/1/2B differentiation that the paper figures rely on are exercised by the Path E fast-path configuration (Section 2.1, `docs/PATH_E_FAST_PATH_PLAN.md` acceptance criteria §6.2). At the time of writing, Path E build is in place (gem5.opt 2026-05-10) and Mode 0/1/2B differentiation smoke is the next gate (tracked as PATH_E P6).
 
 The RTL testbenches verify that the hardware implementation of these already-proven algorithms is faithful to the spec. This is a much narrower verification scope than proving a novel algorithm correct from scratch.
 
@@ -774,7 +780,7 @@ The RTL testbenches verify that the hardware implementation of these already-pro
 
 For the paper and potential rebuttal:
 
-> "The IO-Uncore control logic was first validated at the behavioral level through full-system simulation (Phase 2, Section X), where real NVMe workloads exercised the mailbox submission, credit flow control, and CQ batching paths end-to-end. The RTL implementation was then verified against the same behavioral specification using directed self-checking testbenches covering all steady-state and boundary-condition scenarios. Functional equivalence between the simulation model and the synthesized RTL was confirmed by comparing per-I/O cycle counts and queue state transitions across matching workload traces."
+> "The IO-Uncore control logic was first validated at the behavioral level through full-system simulation (Phase 2, Section X), where real NVMe workloads exercised the mailbox submission, credit flow control, and CQ batching paths end-to-end. For the multi-million-IOPS regime targeted by this work we adopt an aggregate-timing model for the SSD's internal pipeline — equivalent to NVMeVirt [Kim et al., FAST '23] and adopted by recent emulator work (SwarmIO [KAIST '26], FEMU [Li et al., FAST '18]) — while keeping gem5's cycle-accurate X86 host CPU and SPDK models unchanged. The IO-Uncore mechanisms (CQE batching, BAR0+0x2000 hint register, NVMe doorbells, MSI-X aggregation) operate at the SSD's PCIe interface boundary with cycle-accurate timing. The RTL implementation was then verified against the same behavioral specification using directed self-checking testbenches covering all steady-state and boundary-condition scenarios. Functional equivalence between the simulation model and the synthesized RTL was confirmed by comparing per-I/O cycle counts and queue state transitions across matching workload traces."
 
 ### 10.3 Testbench Architecture
 
@@ -901,10 +907,12 @@ For each config (NQ, QD) in {(16,64), (64,64), (16,128), (64,128)}:
 
 | Config | NQ | QD | Credits | Purpose |
 |--------|----|----|---------|---------|
-| A (gem5 match) | 16 | 64 | 64 | Matches Phase 2 simulation. Validates RTL vs sim equivalence. |
-| B (scale queues) | 64 | 64 | 64 | Production queue count. Shows area scaling with NQ. |
+| A (small) | 16 | 64 | 64 | Pre-relayout gem5 baseline. Retained for area-vs-NQ scaling reference. |
+| B (gem5 match) | 64 | 64 | 64 | **Matches the current Phase 2 simulator** after the 2026-05-14 BAR0 relayout (`MaxIOCQueue = MaxIOSQueue = 64`). Validates RTL vs sim equivalence. |
 | C (scale depth) | 16 | 128 | 128 | Deep queue depth. Shows area scaling with QD. |
 | D (production) | 64 | 128 | 128 | Full production scale. Upper bound for paper. |
+
+> **Note** — Until 2026-05-14, Config A (16 QP) matched the gem5 simulator; the simulator has since moved to 64 QP, so the **gem5-match anchor for RTL ↔ sim equivalence is now Config B**. Config A is retained as a scaling-curve reference point only.
 
 ### 11.5 Paper Deliverables
 
@@ -1002,7 +1010,7 @@ RTL_design/
 
 ## 13. Action Items Outside This Spec
 
-1. **gem5 CPU clock update:** Change from default 2 GHz to 5 GHz in `boot_gem5.sh` or `fs.py` options to match modern CPU specifications. This affects Phase 1/2 simulation results — re-run baseline if needed.
+1. ~~**gem5 CPU clock update:** Change from default 2 GHz to 5 GHz~~ **Resolved (see §2.2 note):** gem5 stays at 2 GHz; 5 GHz is presented as a projection by scaling the measured cycle budget. No baseline re-run.
 2. **ASAP7 PDK acquisition:** Download from Arizona State University, verify library files load in Design Compiler.
 3. **DMA Sequencer sub-project:** Follow-up spec for token-based DMA issue with backpressure.
 4. **Hardware Scheduler sub-project:** Follow-up spec for weighted round-robin / deficit fair queuing.
@@ -1293,7 +1301,7 @@ log:
   ├──────────────────┼──────────────────────┼─────────────────────────────────────────────────────────────┤
   │ io_uncore_top.v  │ Top wrapper          │ Just wires. Instantiates everything else and connects them. │
   ├──────────────────┼──────────────────────┼─────────────────────────────────────────────────────────────┤
-  │ mmio_decoder.v   │ Address router       │ Combinational logic. No state.                              │
+  │ mmio_decoder.v   │ Address router       │ Combinational logic. BAR0 32 KiB. Routes 0x0000/0x1000/0x2000/0x3000/0x4000 ranges. │
   ├──────────────────┼──────────────────────┼─────────────────────────────────────────────────────────────┤
   │ sq_engine.v      │ Submission engine    │ Most complex module. Has FSM + per-queue latches.           │
   ├──────────────────┼──────────────────────┼─────────────────────────────────────────────────────────────┤
@@ -1373,7 +1381,9 @@ Reviewers at top-tier architecture venues are going to aggressively probe the bo
 - **The Fix:** Make `hint_ready` a single, global 32-bit register. Increment it in `C_ENQUEUE` when any CQE arrives, and decrement it in `C_WRITEBACK` by the exact flush count. This replaces a massive adder tree with simple +1 / -N arithmetic.
 ---
 
-## 13. Future-Phase Mechanisms for 2-3× CPU-Cycle Reduction
+## 13. Phase-4 Mechanisms for 2-3× CPU-Cycle Reduction
+
+> **Status (2026-05-14):** Mechanisms #1, #2, and #4 are *in flight in the simulator and SPDK* (controller.cc + nvme_pcie_*; gem5.opt build with FreeCIDBase 0x4000 and `MaxIOCQueue=64`). They are no longer pure "future work" — the SPDK-side bring-up is tracked by the *Mech1+2+4 Task* series, currently at Task 8 (Build, smoke, verify). Mechanism #3 remains future / v2-paper scope. The RTL block diagram for these mechanisms still has to be drafted; the sizing in §13.2–§13.5 is the design target the synthesizable Verilog must hit.
 
 ### 13.1 Motivation
 
@@ -1398,11 +1408,11 @@ To push the headline lift to **2-3×**, the natural next step is to extend the u
 
 | Resource | Sizing |
 |---|---|
-| Free-CID FIFO storage | 16 b × QUEUE_DEPTH × NUM_QPAIRS ≈ 64 KB SRAM for 128 qpairs × 256 entries (banked alongside SQ Engine SRAM) |
-| Head/tail pointer per qpair | ~10 b × 2 × 128 = ~320 B |
+| Free-CID FIFO storage | 16 b × QUEUE_DEPTH × NUM_QPAIRS ≈ 16 KB SRAM for the current gem5-match config (64 qpairs × QD=64; matches §11.4 Config B). 32 KB at the §11.4 Config D upper bound (64 qpairs × QD=128). Banked alongside SQ Engine SRAM. |
+| Head/tail pointer per qpair | ~10 b × 2 × 64 = ~160 B (Config B); ~320 B at Config D |
 | Push FSM (CQE-completion side) | ~50 gates |
 | Pop FSM (MMIO-read side) | ~50 gates |
-| New MMIO surface | One read at `BAR0 + free_cid_offset(qid)` per submission; decoder is a one-case extension of the existing BAR0 demux |
+| New MMIO surface | One read at `BAR0 + 0x4000 + qid·stride` per submission (FreeCIDBase = 0x4000, see §3.2 BAR0 map). Decoder is a one-case extension of the existing BAR0 demux. |
 
 **Cycle budget at 1 GHz.** 1 cycle to pop (the MMIO read latency dominates anyway); 1 cycle to push on CQE. Total free-list traffic per IO: 2 SRAM ops on a banked region that is independent of the SQE / CQE banks already specified — **no new arbiter contention**.
 
@@ -1414,7 +1424,7 @@ To push the headline lift to **2-3×**, the natural next step is to extend the u
 
 **Host-side savings:** ~5-10 ns/IO. Small in isolation, but **structurally required by Mechanism #1**: once the hardware owns the free-list, the host's software `qpair->queue_depth` shadow becomes stale unless it can read the authoritative counter back.
 
-**RTL footprint.** 16 b counter per qpair × 128 qpairs = 256 B. Already implied by the existing Credit Manager (line 714 `credit_avail` signal). Adds one MMIO read decoder case.
+**RTL footprint.** 16 b counter per qpair × 64 qpairs = 128 B at the current gem5-match config (Config B). Already implied by the existing Credit Manager (`credit_avail` signal). Adds one MMIO read decoder case.
 
 **Feasibility verdict: trivial.** Essentially free if Mechanism #1 is built. **Recommended for Phase 4 alongside #1.**
 
@@ -1467,9 +1477,9 @@ SPDK uses the age field to size its CQ-scan width adaptively — pre-allocating 
 | + Mech #4 (Phase 4) | ~470 ns | 2.13 M | 2.6× | Trivial CQ Engine extension |
 | + Mech #3 (Phase 5 / v2 paper) | ~370 ns | 2.64 M | **3.2×** | Control + data-plane uncore; new application API |
 
-### 13.7 Rationale for the Selected Phase 4 Scope
+### 13.7 Rationale for the Selected Phase 4 Scope (now in flight)
 
-Mechanisms #1, #2, and #4 are bundled because:
+Mechanisms #1, #2, and #4 are bundled — and being prototyped together in the simulator + SPDK right now (`Mech1+2+4 Tasks 1–8`) — because:
 
 1. **All three are pure control-plane extensions.** They fit inside the architectural boundary the current RTL spec already drew — same SRAM model, same arbiter framework, same MMIO decoder, same FSM style.
 2. **No new SPDK API.** The only host-side change is replacing `TAILQ_FIRST(&free_tr)` with one MMIO read; this is a one-line patch to `nvme_pcie_qpair_submit_request`. Applications and middleware see no change.
