@@ -123,11 +123,11 @@ def engine(ax, x, y, w, h, name, note, addr):
     """Hot-path engine block (accent tint)."""
     sbox(ax, x, y, w, h, fill=FILL_ENGINE, edge=ACCENT, lw=1.1, z=3)
     cx = x + w / 2
-    label(ax, cx, y + h - 2.6, name, size=7.4, weight="bold", z=4)
+    label(ax, cx, y + h - 2.9, name, size=8.4, weight="bold", z=4)
     if note:
-        label(ax, cx, y + h / 2 - 0.4, note, size=5.0, color=GREY_DARK, z=4)
+        label(ax, cx, y + h / 2 - 0.8, note, size=6.2, color=GREY_DARK, z=4)
     if addr:
-        label(ax, cx, y + 1.7, addr, size=5.0, color=GREY_MED, style="italic",
+        label(ax, cx, y + 1.9, addr, size=6.2, color=GREY_MED, style="italic",
               z=4)
 
 
@@ -135,9 +135,9 @@ def support(ax, x, y, w, h, name, note):
     """Shared support block (grey)."""
     sbox(ax, x, y, w, h, fill=FILL_SUPPORT, edge=GREY_DARK, lw=1.0, z=3)
     cx = x + w / 2
-    label(ax, cx, y + h - 2.6, name, size=7.0, weight="bold", z=4)
+    label(ax, cx, y + h - 2.9, name, size=8.0, weight="bold", z=4)
     if note:
-        label(ax, cx, y + 2.0, note, size=5.0, color=GREY_DARK, z=4)
+        label(ax, cx, y + 2.2, note, size=6.2, color=GREY_DARK, z=4)
 
 
 def plot(out_png: Path) -> None:
@@ -166,7 +166,7 @@ def plot(out_png: Path) -> None:
 
     # MMIO decoder: host-facing left bar (BAR0 routing)
     sbox(ax, 25.5, 14, 4.2, 37, fill=FILL_SUPPORT, edge=GREY_DARK, lw=1.0, z=3)
-    label(ax, 27.6, 32.5, "MMIO decoder", size=6.6, weight="bold", rot=90, z=4)
+    label(ax, 27.6, 32.5, "MMIO decoder", size=7.6, weight="bold", rot=90, z=4)
 
     # three hot-path engines + credit manager (2x2). Block notes kept terse;
     # the paper text expands each one.
@@ -177,9 +177,9 @@ def plot(out_png: Path) -> None:
 
     # shared SRAM substrate (via round-robin arbiter)
     sbox(ax, 31, 14, 26, 9, fill=FILL_SRAM, edge=GREY_DARK, lw=1.0, z=3)
-    label(ax, 44, 19.6, "Shared SRAM  (via arbiter)", size=6.4, weight="bold",
+    label(ax, 44, 19.9, "Shared SRAM  (via arbiter)", size=7.4, weight="bold",
           color=GREY_DARK, z=4)
-    label(ax, 44, 16.1, "SQ / CQ buffers, PRP lists", size=5.6,
+    label(ax, 44, 16.2, "SQ / CQ buffers, PRP lists", size=6.4,
           color=GREY_DARK, z=4)
 
     # ---- on-die peripherals ------------------------------------------------
