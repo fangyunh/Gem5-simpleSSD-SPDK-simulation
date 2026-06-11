@@ -1,6 +1,6 @@
 # SimpleSSD + gem5 + SPDK Full-System Simulation — Project Context
 
-**Last updated:** 2026-05-15
+**Last updated:** 2026-06-07
 **Audience:** A fresh AI agent (or new engineer) joining this project.
 **Goal of this file:** Hand you the complete project picture — *what* it is, *where* the
 implementation lives, *which file owns each topic*, *how* to run things, and *where to
@@ -20,8 +20,11 @@ ultra-high IOPS and to design a hardware solution. The stack is:
   workload, generating real NVMe traffic to the modeled SSD.
 
 The research finding is that **the host CPU saturates at ~0.82 M IOPS** for 4 KB
-random reads, far below the SSD's device ceiling (~32 M IOPS in the high-iops
-config). Three host-CPU stages dominate the per-IO budget: **PRP-list construction
+random reads, far below the SSD's aggregate device ceiling (~8 M IOPS in the
+high-iops config, FastPathTmaxPerChannel 250 K × 32 channels; lowered from the
+earlier 1 M/channel = 32 M setting on 2026-05-15 so the device keeps ~10× headroom
+over the single-core host rather than being an unrealistically fast outlier). Three
+host-CPU stages dominate the per-IO budget: **PRP-list construction
 (~337 ns)**, **tracker bookkeeping (~218 ns)**, and **state dealloc (~295 ns)**.
 
 We propose an on-die **I/O-Uncore** (a CPU-uncore hardware block) that absorbs those
@@ -86,9 +89,9 @@ Results land as CSV files under `results/phase1_runs/<tag>/` and are plotted by
 **Question:** at what NVMe throughput does the host CPU become the bottleneck, and
 what is the exact CPU cost per I/O?
 
-**Answered (2026-05-10):** on `fast_ssd_highiops.cfg` (Storage-Next class, ~32 M IOPS
-device ceiling), an unmodified SPDK polling stack saturates at **0.82 M IOPS at
-QD=128 for 4 KB random reads** — 2.6 % of device capability — while 97 % of its
+**Answered (2026-05-10):** on `fast_ssd_highiops.cfg` (Storage-Next class, ~8 M IOPS
+aggregate device ceiling), an unmodified SPDK polling stack saturates at **0.82 M IOPS at
+QD=128 for 4 KB random reads** — ~10 % of device capability — while 97 % of its
 polling calls return zero completions. The per-IO budget decomposes (CSV columns) as:
 
 ```
@@ -114,7 +117,7 @@ The dominant elidable costs are **PRP-list construction (~337 ns)** and
 We design an on-die **I/O-Uncore** that relocates per-IO host stages into a
 CPU-uncore-resident hardware block. The simulator models this at three progressively
 deeper levels. All numbers below are **measured** on `fast_ssd_highiops.cfg`
-(Storage-Next class, ~32 M IOPS device ceiling), single qpair, 4 KB random reads,
+(Storage-Next class, ~8 M IOPS aggregate device ceiling), single qpair, 4 KB random reads,
 2 GHz simulated X86 AtomicSimpleCPU (no L1/L2; mem_mode=atomic). Runs: `paper_qdsweep_mode0/1/2_20260510` and bigANN trace
 runs `paper_trace_mode0/2_20260510`.
 
@@ -126,7 +129,7 @@ runs `paper_trace_mode0/2_20260510`.
 
 **QD-sweep lift (Mode 2 / Mode 0):** 4 KB random read — 1.43× @ QD=16, 1.38× @ QD=32, 1.36× @ QD=64, 1.35× @ QD=128. BigANN trace — 1.45× / 1.40× / 1.38× / 1.37× at the same QDs. The lift is largest at low QD (where each IO's per-stage savings matter more) and smallest at high QD (where polling overlap already amortizes some cost in Mode 0).
 
-**New CPU-bound ceiling after Mode 2.** Mode 2 IOPS is essentially flat at ~1.106 M across QD ∈ {16, 32, 64, 128}, indicating Mode 2 itself becomes the new CPU-bound saturation point. The residual gap to the ~32 M IOPS device ceiling is what motivates **Mech #3 (HW completion-callback dispatcher) as future work**. Mech #3 requires a new SPDK application API and crosses from "control-plane uncore" to "control + data-plane uncore." Its quantitative ceiling is not measured in this paper. See `docs/IO-Uncore RTL Design Specification — Phase 3 Silicon Feasibility.md` §13.
+**New CPU-bound ceiling after Mode 2.** Mode 2 IOPS is essentially flat at ~1.106 M across QD ∈ {16, 32, 64, 128}, indicating Mode 2 itself becomes the new CPU-bound saturation point. The residual gap to the ~8 M IOPS aggregate device ceiling is what motivates **Mech #3 (HW completion-callback dispatcher) as future work**. Mech #3 requires a new SPDK application API and crosses from "control-plane uncore" to "control + data-plane uncore." Its quantitative ceiling is not measured in this paper. See `docs/IO-Uncore RTL Design Specification — Phase 3 Silicon Feasibility.md` §13.
 
 ### 2.4 Paper
 
@@ -198,8 +201,8 @@ Host Linux (the real machine)
         │     ├── Path-E fast-path timing model (NVMeVirt-style; see §7.4)
         │     ├── I/O-Uncore Mode 1 (SQ-fetch gate + CQE staging buffer)
         │     ├── I/O-Uncore Mode 2 v1 (Mailbox SQ Engine @ BAR0+0x3000)
-        │     ├── Mechanism #1 (HW free-CID ring @ BAR0+0x3400)
-        │     ├── Mechanism #2 (HW queue-depth counter @ BAR0+0x3800)
+        │     ├── Mechanism #1 (HW free-CID ring @ BAR0+0x4000)
+        │     ├── Mechanism #2 (HW queue-depth counter @ BAR0+0x4400)
         │     ├── Mechanism #4 (typed hint register @ BAR0+0x2000)
         │     └── NAND flash timing model (fast_ssd_highiops.cfg by default)
         ├── Linux 5.4.49 guest kernel (vmlinux-5.4.49, vfio + virtio-9p builtin)
@@ -458,14 +461,20 @@ the simulator config says.
 | `0x1000 – 0x1FFF` | NVMe doorbells (`[REG_DOORBELL_BEGIN, REG_DOORBELL_END)`) | W |
 | `0x2000 – 0x2003` | **Mech #4: typed hint register** `(count:16, age_units:16)` | R (RO) |
 | `0x2004 – 0x2FFF` | Reserved | — |
-| `0x3000 – 0x33FF` | **Mode 2 v1: Mailbox region** (17 qids × 32-byte slots; used up to `0x3220`) | W |
-| `0x3400 – 0x37FF` | **Mech #1: Free-CID ring read endpoints** (1 × uint32 per qid; side-effect pop) | R |
-| `0x3800 – 0x3BFF` | **Mech #2: Queue-depth counter read endpoints** (1 × uint32 per qid; side-effect-free) | R |
-| `0x3C00 – 0x7FFF` | Reserved for Mode 3 / future extensions | — |
+| `0x3000 – 0x3FFF` | **Mode 2 v1: Mailbox region** (65 qids × 32-byte slots; used up to `0x3820`) | W |
+| `0x4000 – 0x43FF` | **Mech #1: Free-CID ring read endpoints** (1 × uint32 per qid; side-effect pop) | R |
+| `0x4400 – 0x47FF` | **Mech #2: Queue-depth counter read endpoints** (1 × uint32 per qid; side-effect-free) | R |
+| `0x4800 – 0x7FFF` | Reserved for Mode 3 / future extensions | — |
 
-`cqsize = MaxIOCQueue + 1 = 17` for the active cfg, so the mailbox uses
-`17 × 0x20 = 0x220` bytes and the free-CID / qdepth regions use `17 × 4 = 0x44`
-bytes each.
+`cqsize = MaxIOCQueue + 1 = 65` for the active cfg (`MaxIOCQueue = 64`), so the
+mailbox uses `65 × 0x20 = 0x820` bytes (up to `0x3820`) and the free-CID / qdepth
+regions use `65 × 4 = 0x104` bytes each. **The free-CID base moved `0x3400 → 0x4000`
+and qdepth `0x3800 → 0x4400` on 2026-05-14** to give the mailbox region a full 4 KB
+of headroom now that `MaxIOCQueue` grew `16 → 64` for multi-qpair work; the SPDK
+macros (`nvme_pcie_internal.h`), the cfg (`FreeCIDBase = 0x4000`), and the controller
+defaults moved together. The single-qpair headline runs dated `20260510` predate this
+relayout, but the exact offsets are not result-determining (they only relocate the MMIO
+windows), so the measured IOPS are unaffected.
 
 > **Critical historical bug:** before `REG_DOORBELL_END = 0x2000` existed, the
 > doorbell handler was a catch-all for any offset ≥ 0x1000. That misrouted every
@@ -481,7 +490,7 @@ Host writes 3 sequential 8-byte values to `BAR0 + MailboxBase + qid * MailboxStr
 |---|---|---|---|
 | `+0x00` | 8 | Word 0 | `[63:56]` opcode · `[55:48]` flags · `[47:32]` cid · `[31:0]` nsid |
 | `+0x08` | 8 | Word 1 | `[63:0]` slba |
-| `+0x10` | 8 | Word 2 | `[63:32]` prp1_lo32 (currently 0; Path-E never dereferences) · `[31:16]` nlb · `[15:0]` control |
+| `+0x10` | 8 | Word 2 | `[63:32]` prp1_lo32 (host data-buffer DMA address, low 32 bits; PRP2 forced 0, single-page only) · `[31:16]` nlb (0-based) · `[15:0]` control |
 
 Controller's `handleMailboxWrite()` FSM latches each 8-byte write
 (`S_LATCH_0/1/2`, 1 cycle each); after the third word lands it arms
@@ -505,7 +514,7 @@ Per-feature ownership in `SimpleSSD-FullSystem/src/dev/storage/simplessd/hil/nvm
 | **Mode 1 — SQ-fetch gate + CQE staging** | `controller.cc`: `collectSubmissionRequest` (Gate 1), `uncoreFlushCQBuffer` (Gate 2), `uncorePendingCQE` vector, `uncoreFlushScheduled` flag |
 | **Mode 2 v1 — Mailbox SQ Engine** | `controller.{hh,cc}`: `handleMailboxWrite`, `mailboxInject`, `MailboxLatch` struct, `mailboxInjectEvent`; `def.hh`: `REG_DOORBELL_END = 0x2000`; `nvme_interface.cc`: doorbell-window bound + fall-through to `writeRegister/readRegister` |
 | **Mech #1 — HW free-CID ring** | `controller.{hh,cc}`: `FreeCIDRing` struct, `freeCidReadNext`, `freeCidRecycle`, `freeCidRings` vector |
-| **Mech #2 — HW queue-depth counter** | `controller.{hh,cc}`: `getInflightCount` (in `readRegister` for `BAR0+0x3800+qid*4`) |
+| **Mech #2 — HW queue-depth counter** | `controller.{hh,cc}`: `getInflightCount` (in `readRegister` for `BAR0+0x4400+qid*4`) |
 | **Mech #4 — typed hint register** | `controller.{hh,cc}`: `getMultiBitHint` (`BAR0+0x2000`), `hintOldestArrivalTicks`; cfg key `HintAgeGranularityPs` |
 | **BAR0 size = 32 KB** | `NVMe.py`: `BAR0Size = '32768B'` |
 | **Cfg-key parsing for all of the above** | `config.cc` parse branches + `readUint` dispatch; `config.hh` enum entries + private members |
@@ -521,7 +530,7 @@ In `spdk/lib/nvme/`:
 
 | Feature | Files / functions |
 |---|---|
-| **MMIO offset macros + field decls** | `nvme_pcie_internal.h`: `MAILBOX_BASE_OFFSET=0x3000`, `MAILBOX_STRIDE_BYTES=0x20`, `FREE_CID_BASE_OFFSET=0x3400`, `QDEPTH_BASE_OFFSET=0x3800`; fields `uncore_mailbox_base`, `uncore_free_cid_base`, `uncore_qdepth_base`, `uncore_hint_reg` on `nvme_pcie_ctrlr` |
+| **MMIO offset macros + field decls** | `nvme_pcie_internal.h`: `MAILBOX_BASE_OFFSET=0x3000`, `MAILBOX_STRIDE_BYTES=0x20`, `FREE_CID_BASE_OFFSET=0x4000`, `QDEPTH_BASE_OFFSET=0x4400` (both moved up 0xC00 on 2026-05-14 for mailbox headroom); fields `uncore_mailbox_base`, `uncore_free_cid_base`, `uncore_qdepth_base`, `uncore_hint_reg` on `nvme_pcie_ctrlr` |
 | **BAR mapping (env-var gated)** | `nvme_pcie.c`: when `SPDK_UNCORE_MODE_B=1` AND BAR0 ≥ `QDEPTH_BASE_OFFSET+256`, map all three pointers; otherwise leave NULL |
 | **Submit path (Mech #1)** | `nvme_pcie_common.c::nvme_pcie_qpair_submit_request`: when `uncore_free_cid_base != NULL && qpair->id != 0`, read next free CID via one MMIO load, use `pqpair->tr[hw_cid]` directly, **skip** `TAILQ_REMOVE(free_tr)` + `TAILQ_INSERT_TAIL(outstanding_tr)` + `qpair->queue_depth++` |
 | **Submit path (Mode 2 mailbox)** | `nvme_pcie_common.c::nvme_pcie_qpair_submit_request`: after tracker is allocated but **before** `build_prps`, branch into the deep-offload path — skip PRP construction, emit 3 × 8-byte MMIO writes to the mailbox slot, skip the standard SQ doorbell, `goto exit` |
@@ -710,7 +719,8 @@ Two configs live at the repo root:
 - `fast_ssd.cfg` — **baseline** (Samsung 970 EVO-class, MLC V-NAND timing,
   ~95 K IOPS theoretical peak).
 - `fast_ssd_highiops.cfg` — **ACTIVE for the IEEE-CAL paper** (Storage-Next class,
-  XL-FLASH-array sense, Gen5×16, ~32 M IOPS device ceiling).
+  XL-FLASH-array sense, Gen5×16, ~8 M IOPS aggregate device ceiling =
+  FastPathTmaxPerChannel 250 K × pal.Channel 32).
 
 ### 10.1 Baseline `fast_ssd.cfg` snapshot
 
@@ -742,9 +752,11 @@ Two configs live at the repo root:
 | `nvme.MaxRequestCount` | 8 | **128** | Drain a fuller SQ per work iteration |
 | `cpu.{ICL,FTL}CoreCount` | 1 | **4** | Parallelize the two stages where SimpleSSD's multi-core audit found low hazards. **HILCoreCount stays at 1** — multi-core hazards in the HIL/NVMe path are unresolved. |
 | `nvme.FastPathEnabled` | 0 | **1** | §7.4; Path-E |
+| `nvme.FastPathTmaxPerChannel` | n/a | **250000** | 250 K IOPS/channel × 32 channels = **8 M IOPS aggregate** device ceiling (lowered from 1 M/channel = 32 M on 2026-05-15 for a realistic ~10× host headroom) |
+| `nvme.MaxIOCQueue` / `MaxIOSQueue` | 16 | **64** | Multi-qpair headroom (relayout 2026-05-14); drives `cqsize = 65` and the BAR0 region offsets in §7.2 |
 | `nvme.UncoreMode` | 0 | **2** | §7.1; mailbox + hint reg active |
 | `nvme.MailboxBase` / `Stride` / `Latch` / `Decode` / `InjectCycles` | n/a | **0x3000 / 0x20 / 1 / 8 / 4** | §7.3 |
-| `nvme.FreeCIDBase` / `FreeCIDLatencyCycles` / `HintAgeGranularityPs` | n/a | **0x3400 / 2 / 1024000 ps** | §7.4 (Mechs #1/#2/#4) |
+| `nvme.FreeCIDBase` / `FreeCIDLatencyCycles` / `HintAgeGranularityPs` | n/a | **0x4000 / 2 / 1024000 ps** | §7.4 (Mechs #1/#2/#4); qdepth implicitly at FreeCIDBase+0x400 = 0x4400 |
 
 > **`cpu.ClockSpeed = 32 GHz` note:** this is a **modeling abstraction** — it
 > compresses the per-IO HIL/ICL/FTL cycle tables (`cpu/cpu.cc:162+`) to ~0.17 µs/IO
@@ -847,7 +859,7 @@ Generated by gem5 at simulation end (or `m5 exit`). Key counters:
 ```
 warn: nvme_interface: Ignoring PCI config write …    → EXPECTED, §8.2 fix
 [Uncore] SQ Engine mailbox enabled at BAR0+0x3000    → Mode 2 mailbox armed
-… free-CID @ BAR0+0x3400, qdepth @ BAR0+0x3800       → SPDK mapped Mech #1/#2 windows
+… free-CID @ BAR0+0x4000, qdepth @ BAR0+0x4400       → SPDK mapped Mech #1/#2 windows
 HIL::NVMe: BAR0 | WRITE | Controller Configuration   → SPDK enabling NVMe
 HIL::NVMe: SQ 0 | CREATE                             → Admin queue created
 HIL::NVMe: SQ 0 | Submission Queue Tail Doorbell     → First I/O submitted
@@ -948,7 +960,7 @@ bash scripts/phase1_4k/driver_phase1.sh --auto \
 | HIL multi-core hazards | `HILCoreCount` must stay at 1. See memory `project_simplessd_multicore_audit.md` — 5 HIGH-risk hazards (`uncoreFlushScheduled`, `uncorePendingCQE`, `aggregationMap`, `shutdownReserved`, `lSQFIFO`). Do not raise. |
 | `CC.EN` shutdown bug | Fix at `controller.cc:1630` — see memory `project_simplessd_shutdown_bug.md`. Without it, first QD works but every subsequent QD hangs at init state 10. |
 | IOPS ceiling on baseline cfg | ~74 K IOPS at QD=16 with `fast_ssd.cfg` 1×400 MHz HIL/ICL/FTL is the real ceiling, not a bug. See memory `project_iops_ceiling.md`. The highiops cfg lifts this. |
-| Simulator structural ceiling | SimpleSSD's controller-CPU model bounds per-IO time at ~5400 cycles regardless of NAND speed; **10 M IOPS at SSD-side is structurally infeasible with CoreCount=1**. Frame results as host-bound. See memory `project_simulator_iops_ceiling.md`. |
+| Simulator SSD-side ceiling | With `FastPathEnabled=1` (Path-E) the highiops cfg bypasses the per-stage HIL/ICL/FTL/PAL event chain for I/O commands, so the SSD-side ceiling is the aggregate fast-path rate **~8 M IOPS** (FastPathTmaxPerChannel 250 K × 32 channels), not the old controller-CPU-bound number. **Do NOT re-cite the stale "~5400 cycles/IO, 10 M IOPS structurally infeasible" framing** — it predates the fast path. The host is the binding bottleneck at single-core; the device becomes binding only near ~5-7 host cores. See memory `project_simulator_iops_ceiling.md`. |
 | Mode 1 lift in polling SPDK | Mode 1 gives ~0.96× of Mode 0 (small loss is expected — coalescing adds latency without removing host work). Don't claim a Mode 1 win under polling. |
 | Mech #3 (cb-dispatch) | Deferred — requires SPDK API change. Documented in `docs/IO-Uncore RTL Design Specification…` §13.4. |
 | `boot_gem5.sh status` | Unreliable. Always cross-check with `pgrep -af gem5.opt`. |
@@ -1000,7 +1012,16 @@ change log if the change is project-wide.
 - 2026-05-12 — Restructured for fresh-agent onboarding: added §1 navigation cheat
   sheet, §2.5 companion-docs index, §7 unified I/O-Uncore implementation reference,
   §15 glossary, §16 maintenance guide. Renumbered to remove §9–§11 gap.
+- 2026-06-07 — Refreshed against the live source for the paper §3 writing pass.
+  Corrected stale values throughout: BAR0 free-CID `0x3400 → 0x4000` and qdepth
+  `0x3800 → 0x4400` (relayout 2026-05-14 for `MaxIOCQueue 16 → 64`, `cqsize 65`);
+  device ceiling `32 M → 8 M` aggregate (`FastPathTmaxPerChannel 250 K × 32`);
+  retired the "~5400 cycles/IO, 10 M infeasible" framing (predates Path-E). The
+  mailbox wire format in §7.3 was verified accurate against `controller.cc`
+  (`word0=[opcode|flags|cid|nsid]`, `word1=slba`, `word2=[prp1_lo32|nlb|control]`,
+  single-page only with multi-page fallback) and left unchanged.
 - 2026-05-11 — Added Path-E fast-path; Mode 1 batching; Mode 2 v1 mailbox SQ Engine
   (24 B compact SQE @ BAR0+0x3000); Mechs #1/#2/#4 (HW free-CID ring @ 0x3400,
-  qdepth counter @ 0x3800, typed hint reg @ 0x2000). BAR0 grew 8 KB → 16 KB → 32 KB.
+  qdepth counter @ 0x3800, typed hint reg @ 0x2000 — these offsets moved on 2026-05-14,
+  see the 2026-06-07 entry). BAR0 grew 8 KB → 16 KB → 32 KB.
 - 2026-03-19 — Initial onboarding document.

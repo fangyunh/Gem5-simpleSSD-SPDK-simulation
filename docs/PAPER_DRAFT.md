@@ -49,13 +49,45 @@ The wall has motivated several lines of hardware work that aim to move I/O execu
 
 The four per-IO costs above describe what any host driver must pay, but how those costs distribute across the actual stages of the SPDK fast path is a question we answer empirically. We instrument a full-system gem5~\cite{binkert2011gem5} simulation running the unmodified \texttt{spdk\_nvme\_perf} workload against SimpleSSD~\cite{jung2017simplessd} configured as a multi-million-IOPS NVMe device model, and drive 4~KB random reads from a single host core through a single queue pair at queue depths from 16 to 128. The configuration models a device whose per-stage latency stays below the host's per-IO software cost, so that the host CPU rather than the storage media is the binding bottleneck of the measurement. We decompose the per-IO budget into the six lifecycle stages an NVMe I/O traverses from start to end, namely SQE and PRP-list construction, tracker allocation, the submission-queue doorbell write together with its ordering fence, completion polling on the CQ phase bit, the completion handler that fires the callback and releases the tracker, and the completion-queue doorbell write together with the final buffer cleanup.
 
-Figure~\ref{fig:cycle_breakdown} shows the resulting breakdown at QD=16 and QD=128 on a 2~GHz simulated host. Single-core IOPS saturate near 0.8~M throughout the sweep, rising only from 776~K at QD=16 to 819~K at QD=128, a 5\% lift across an 8$\times$ queue-depth increase, and the two bars sit within the same 5\% of each other in total height, establishing the cost as per-IO structural rather than per-batch amortized. The submission-side work dominates the host budget. SQE and PRP-list construction together with tracker allocation account for roughly 40\% of cycles per I/O. The completion handler that fires the callback and releases the tracker accounts for another 22\%. Completion polling and the two doorbell stages contribute the remainder, each on the order of 10 to 20\% of the budget. Mapping these stages back to the architectural costs identified above, the submission-side work and the completion handler embody the queue-state coherence traffic that every SQE and CQE round-trip pays, the doorbell stages embody the MMIO posted-write cost paired with the ordering fence that the protocol forces between SQE write and doorbell store, and completion polling embodies the cache-line coherence transition that the device's CQE DMA imposes on the host. The total cycles per I/O under this baseline sit in the same order of magnitude as published single-core, single-qpair SPDK measurements on production NVMe hardware~\cite{Yang2017SPDKAD}.
+Figure~\ref{fig:cycle_breakdown} shows the resulting breakdown at QD=16 and QD=128 on a 2~GHz simulated host. Single-core IOPS saturate near 0.8~M throughout the sweep, rising only from 776~K at QD=16 to 819~K at QD=128, a 5\% lift across an 8$\times$ queue-depth increase, and the two bars sit within the same 5\% of each other in total height, establishing the cost as per-IO structural rather than per-batch amortized. The submission-side work and the completion handler together dominate the host budget, with completion polling and the two doorbell stages contributing the remainder. Mapping these stages back to the architectural costs identified above, the submission-side work and the completion handler embody the queue-state coherence traffic that every SQE and CQE round-trip pays, the doorbell stages embody the MMIO posted-write cost paired with the ordering fence that the protocol forces between SQE write and doorbell store, and completion polling embodies the cache-line coherence transition that the device's CQE DMA imposes on the host. The total cycles per I/O under this baseline sit in the same order of magnitude as published single-core, single-qpair SPDK measurements on production NVMe hardware~\cite{Yang2017SPDKAD}.
 
 The flat saturation curve has a direct architectural consequence. Because the total per-IO budget does not shrink with queue depth, no purely software-side approach that relies on deeper batching can lower it, and any meaningful reduction in cycles per I/O must therefore eliminate work from the per-IO critical path itself.
 
 ---
 
 ## §3. IAU: A Host-Integrated I/O Uncore
+\label{sec:iau}
+
+% TODO bib:intel_vmd --- Intel Volume Management Device reference (used in \S3.1 below).
+
+### 3.1 Placement and principle
+\label{sec:iau-placement}
+
+IAU sits on the CPU die as an on-die I/O assistant block co-located with the integrated memory controller and the PCIe root complex, shared across the cores within a chiplet. Placement of NVMe-touching logic inside the uncore has precedent, since Intel's Volume Management Device already resides there to perform PCIe enumeration and namespace registration~\cite{intel_vmd}, and IAU extends that pattern from enumeration-only services to per-IO queue execution.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/iau_block.png}
+\caption{IAU placement, structure, and per-IO dataflow. The uncore sits beside the IMC and PCIe root complex on the CPU die; three hot-path engines (SQ Engine, CQ Engine, Doorbell Coalescer) execute the NVMe fast path over a shared SRAM, with the Credit Manager and MMIO decoder as grey support blocks. The circled markers trace one I/O: (1) the host submits through the mailbox, (2) the SQ Engine builds the SQE with its PRP list and command ID, (3) the Doorbell Coalescer aggregates doorbells, (4) the command issues to the device over PCIe, (5) the CQ Engine batches the completion, and (6) the host polls a single status-and-hint register. The DRAM-resident SQ and CQ rings are mirrored in batches for compatibility (dashed).}
+\label{fig:iau_block}
+\end{figure}
+
+Internally, IAU decouples the architectural view of the storage controller from its execution substrate, so that software and the NVMe specification continue to observe DRAM-resident submission and completion rings, standard head/tail semantics, and conventional MSI-X interrupts, while the uncore privately executes the per-IO hot path from SRAM-resident state and updates the DRAM rings in batches as a compatibility mirror. The mirror is maintained by batching completion-queue entries into DRAM under a count-or-timer policy, aggregating per-IO MMIO doorbells from the uncore to the device under the same policy, and coalescing MSI-X interrupts so that one interrupt covers many completed I/Os. These mirroring behaviors follow directly from the compatibility-mirror principle and are not separately evaluated modes of operation.
+
+POSIX, io\_uring, and SPDK application interfaces are unchanged by this separation. Only the NVMe driver, or in user-space deployments the SPDK NVMe library, needs to be aware of IAU, and that awareness is required only at queue-setup time in order to opt into the mailbox submission path and the typed hint register. A second principle, complementary to the first, partitions every per-IO stage into an NVMe-protocol portion that IAU absorbs into hardware and an application portion that remains on the CPU because moving it off-die would change application semantics. The protocol portion comprises the 64-byte SQE encoding, the PRP and SGL list construction, the command-identifier lifecycle, the CQE parse, the management of submission and completion ring slots, and the doorbell-MMIO ordering. The application portion comprises the compact descriptor that names each I/O by logical block address, length, and buffer pointer, the in-flight handle that carries the user callback pointer and user context, the mailbox MMIO notification that wakes the uncore, the callback execution itself, and the return of the data buffer to the application-side memory pool. This boundary is what the non-zero IAU residuals on Fig.~\ref{fig:cycle_breakdown} represent, and \S\ref{sec:iau-mechanisms} walks each of the hot-path engines through this offload-and-residual split.
+
+### 3.2 Hot-path engines
+\label{sec:iau-mechanisms}
+
+*Pending draft.*
+
+### 3.3 NVMe compliance and the fail-safe
+\label{sec:iau-compliance}
+
+*Pending draft.*
+
+### 3.4 SRAM sizing and silicon plausibility
+\label{sec:iau-sram}
 
 *Pending draft.*
 
