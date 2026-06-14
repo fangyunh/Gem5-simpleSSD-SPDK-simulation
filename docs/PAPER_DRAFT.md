@@ -185,7 +185,14 @@ Section~\ref{subsec:perio} established that the vanilla SPDK baseline saturates 
 
 Figure~\ref{fig:iau_breakdown} attributes the saving to the submission side. The SQ Engine's on-die SQE and PRP-list construction collapses the dominant stages, with address translation falling from 357 to 157~ns and tracker allocation from 236 to 221~ns on the BigANN trace, while the completion handler survives nearly intact because the host still runs the user callback and the larger completion saving awaits the deferred dispatcher of \S\ref{sec:iau-mechanisms}. The completion-poll counters confirm that the completion-side coherence cost of \S\ref{subsec:NVMEQE} is removed. At QD=128 the baseline issues 223{,}698 \texttt{process\_completions} calls of which about 97\% return zero completions, whereas under IAU the count collapses to 8{,}646 with no empty polls and 128 completions per call, since the CQ Engine's readiness hint replaces the empty ring scan with a single on-die status-register read.
 
-Two further results fix the design boundary. A transparent-IAU ablation that activates the uncore behind an unmodified SPDK reaches only 0.808~M IOPS at QD=128, about 0.99$\times$ the baseline, because batching completions alone cannot move a submission-dominated budget; the lift therefore requires the small host-side mailbox enablement of \S\ref{sec:iau-placement} rather than a fully transparent design. IAU's own throughput is essentially flat across the sweep at roughly 1.106~M IOPS for every queue depth, identifying it as a new CPU-bound ceiling well below the 8~M device aggregate, with the residual gap left to the deferred completion-callback dispatcher.
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{img/qd_sweep.png}
+\caption{IOPS (left axis) and cycles per I/O at the 2~GHz host clock (right axis) versus queue depth, for the vanilla SPDK baseline and IAU on 4~KB random reads. IAU's IOPS stays flat across the sweep, marking a new CPU-bound ceiling well above the baseline and well below the device aggregate.}
+\label{fig:qd_sweep}
+\end{figure}
+
+Two further results fix the design boundary. A transparent-IAU ablation that activates the uncore behind an unmodified SPDK reaches only 0.808~M IOPS at QD=128, about 0.99$\times$ the baseline, because batching completions alone cannot move a submission-dominated budget; the lift therefore requires the small host-side mailbox enablement of \S\ref{sec:iau-placement} rather than a fully transparent design. As Figure~\ref{fig:qd_sweep} shows, IAU's throughput is essentially flat across the sweep at roughly 1.106~M IOPS for every queue depth while its cycle budget holds near 1{,}810, identifying IAU as a new CPU-bound ceiling well below the 8~M device aggregate, with the residual gap left to the deferred completion-callback dispatcher.
 
 \subsection{Robustness and threats to validity}
 \label{sec:eval-threats}
