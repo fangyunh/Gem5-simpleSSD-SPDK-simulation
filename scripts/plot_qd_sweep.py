@@ -136,12 +136,14 @@ def plot(repo_root: Path, out_prefix: Path) -> None:
     ax_iops.set_xlabel("Queue depth")
 
     ax_iops.set_ylabel("IOPS (millions)")
-    ax_iops.set_ylim(0, 1.3)
+    # Axis zoomed to the data region (not zero-based) so the 1.35x gap is
+    # visible; both configurations and both metrics keep clear separation.
+    ax_iops.set_ylim(0.70, 1.20)
     ax_iops.yaxis.grid(True, linestyle=":", linewidth=0.5, color=GREY_LIGHTER)
     ax_iops.set_axisbelow(True)
 
     ax_cyc.set_ylabel("Cycles per I/O")
-    ax_cyc.set_ylim(0, 3000)
+    ax_cyc.set_ylim(1600, 2700)
 
     # Legend: colour encodes configuration, line style encodes metric.
     handles = [
@@ -154,8 +156,8 @@ def plot(repo_root: Path, out_prefix: Path) -> None:
         Line2D([0], [0], color="black", linewidth=1.2, linestyle=":",
                label="Cycles/IO (right)"),
     ]
-    ax_iops.legend(handles=handles, loc="lower left", frameon=False,
-                   handlelength=1.8, handletextpad=0.5, borderaxespad=0.6,
+    ax_iops.legend(handles=handles, loc="center", frameon=False,
+                   handlelength=1.8, handletextpad=0.5, borderaxespad=0.4,
                    labelspacing=0.3, ncol=2, columnspacing=1.2)
 
     fig.tight_layout()
