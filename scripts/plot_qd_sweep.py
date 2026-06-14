@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 Queue-depth sweep for paper Section 4.2 (Figure F3, fig:qd_sweep): IOPS
-versus queue depth, vanilla SPDK baseline vs IAU, on the 4 KB random-read
-workload, 1 core / 1 qpair.
+versus queue depth, vanilla SPDK baseline vs IAU, on the DiskANN BigANN
+trace replay, 1 core / 1 qpair.
 
 This is the headline results figure. The load-bearing visual is the flat IAU
-IOPS curve: IAU saturates the host core at ~1.106 M IOPS for every queue
-depth, well above the baseline that only inches from 776 K to 819 K across an
+IOPS curve: IAU saturates the host core at ~1.102 M IOPS for every queue
+depth, well above the baseline that only inches from 763 K to 804 K across an
 8x queue-depth increase, identifying IAU as a new CPU-bound ceiling.
 
 Only IOPS is plotted. Cycles/IO is the exact inverse of IOPS (clock / IOPS),
@@ -15,12 +15,12 @@ overlap the baseline IOPS line and invite misreading; the per-stage cycle
 story already lives in fig:iau_breakdown. The cycles/IO equivalents are still
 printed to stdout for the prose in Section 4.
 
-Data sources (the two admissible rand4k runs; all QD rows)
-----------------------------------------------------------
+Data sources (the admissible BigANN trace runs; all QD rows)
+------------------------------------------------------------
   vanilla SPDK baseline:
-      results/rand4k_1c1qp/rand4k_mode0_20260510/core0_qp1/phase1_results.csv
+      results/bigann_trace_1c1qp/paper_trace_mode0_20260510/core0_qp1/phase1_results.csv
   IAU:
-      results/rand4k_1c1qp/rand4k_mode2_20260510/core0_qp1/phase1_results.csv
+      results/bigann_trace_1c1qp/paper_trace_mode2_20260510/core0_qp1/phase1_results.csv
 
 The transparent-IAU ablation (mode 1) is deliberately not plotted, per the
 Section 4 outline: its shallow-QD dip is a one-sentence ablation, not a curve.
@@ -58,9 +58,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-BASELINE_CSV = ("results/rand4k_1c1qp/rand4k_mode0_20260510/"
+BASELINE_CSV = ("results/bigann_trace_1c1qp/paper_trace_mode0_20260510/"
                 "core0_qp1/phase1_results.csv")
-IAU_CSV = ("results/rand4k_1c1qp/rand4k_mode2_20260510/"
+IAU_CSV = ("results/bigann_trace_1c1qp/paper_trace_mode2_20260510/"
            "core0_qp1/phase1_results.csv")
 HOST_HZ = 2.0e9
 
