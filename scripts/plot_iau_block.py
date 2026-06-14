@@ -13,18 +13,20 @@ its system context:
         Credit Manager for backpressure and an MMIO Decoder for BAR0 routing.
         The BAR0 host interface of each engine is annotated (mailbox 0x3000,
         status/hint 0x2000, doorbell 0x1000).
-  (iii) The DRAM compatibility mirror. SQ/CQ rings stay in DRAM; the uncore
-        mirrors them in batches rather than replacing them (a design feature,
-        dashed, not measured in Section 4).
+  (iii) The DRAM rings as backup. SQ/CQ rings stay in DRAM as a lazily-synced
+        backup; the host's fast path talks to the uncore directly, not through
+        them (a design feature, dashed, not measured in Section 4).
 
 The three blue engines are the paper's contribution; the grey blocks are
 shared support. Module set matches RTL_design/src: sq_engine, cq_engine,
 db_coalescer, credit_manager, sram_arbiter, mmio_decoder (stat_counters,
 telemetry only, is omitted for clarity).
 
-Style matches scripts/plot_cycle_breakdown.py: serif font, grey palette with
-one blue accent, black edges, 300 dpi PNG. Text is kept deliberately sparse;
-the caption in the paper carries the prose.
+The CPU cores, IMC, PCIe RC, DRAM, and NVMe SSD are drawn small on purpose so
+the IAU block carries most of the figure and its in-block text stays legible
+once the figure is scaled into a column. Style matches
+scripts/plot_cycle_breakdown.py: serif font, grey palette with one blue
+accent, black edges, 300 dpi PNG.
 
 Usage
 -----
@@ -42,7 +44,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch, Rectangle, Circle
-from matplotlib.lines import Line2D
 
 
 # ---- palette (shared with plot_cycle_breakdown.py) -------------------------
@@ -99,16 +100,17 @@ def label(ax, x, y, s, *, size=8, color=TEXT, weight="normal", style="normal",
             fontstyle=style, ha=ha, va=va, rotation=rot, zorder=z)
 
 
-def arrow(ax, p0, p1, *, color, lw=1.4, ls="solid", astyle="-|>", z=4):
+def arrow(ax, p0, p1, *, color, lw=1.4, ls="solid", astyle="-|>", z=4,
+          mscale=8.5):
     ax.annotate(
         "", xy=p1, xytext=p0,
         arrowprops=dict(arrowstyle=astyle, color=color, lw=lw, linestyle=ls,
-                        shrinkA=0, shrinkB=0, mutation_scale=7.5),
+                        shrinkA=0, shrinkB=0, mutation_scale=mscale),
         zorder=z,
     )
 
 
-def stepmark(ax, x, y, n, *, r=1.15, z=7):
+def stepmark(ax, x, y, n, *, r=1.35, z=7):
     """Light numbered badge marking one beat of the per-I/O dataflow.
 
     White fill + thin accent ring + accent numeral, so it annotates the
@@ -116,123 +118,116 @@ def stepmark(ax, x, y, n, *, r=1.15, z=7):
     """
     ax.add_patch(Circle((x, y), r, facecolor="white", edgecolor=ACCENT,
                          linewidth=1.0, zorder=z))
-    label(ax, x, y, str(n), size=5.8, color=ACCENT, weight="bold", z=z + 1)
+    label(ax, x, y, str(n), size=6.6, color=ACCENT, weight="bold", z=z + 1)
 
 
 def engine(ax, x, y, w, h, name, note, addr):
-    """Hot-path engine block (accent tint)."""
-    sbox(ax, x, y, w, h, fill=FILL_ENGINE, edge=ACCENT, lw=1.1, z=3)
+    """Hot-path engine block (accent tint). Title bold; note/addr enlarged."""
+    sbox(ax, x, y, w, h, fill=FILL_ENGINE, edge=ACCENT, lw=1.2, z=3)
     cx = x + w / 2
-    label(ax, cx, y + h - 2.9, name, size=8.4, weight="bold", z=4)
+    label(ax, cx, y + h - 3.4, name, size=9.4, weight="bold", z=4)
     if note:
-        label(ax, cx, y + h / 2 - 0.8, note, size=6.2, color=GREY_DARK, z=4)
+        label(ax, cx, y + h / 2 - 0.4, note, size=8.4, color=GREY_DARK, z=4)
     if addr:
-        label(ax, cx, y + 1.9, addr, size=6.2, color=GREY_MED, style="italic",
+        label(ax, cx, y + 2.2, addr, size=8.0, color=GREY_MED, style="italic",
               z=4)
 
 
 def support(ax, x, y, w, h, name, note):
-    """Shared support block (grey)."""
-    sbox(ax, x, y, w, h, fill=FILL_SUPPORT, edge=GREY_DARK, lw=1.0, z=3)
+    """Shared support block (grey). Title bold; note enlarged."""
+    sbox(ax, x, y, w, h, fill=FILL_SUPPORT, edge=GREY_DARK, lw=1.1, z=3)
     cx = x + w / 2
-    label(ax, cx, y + h - 2.9, name, size=8.0, weight="bold", z=4)
+    label(ax, cx, y + h - 3.4, name, size=9.0, weight="bold", z=4)
     if note:
-        label(ax, cx, y + 2.2, note, size=6.2, color=GREY_DARK, z=4)
+        label(ax, cx, y + 2.6, note, size=8.4, color=GREY_DARK, z=4)
 
 
 def plot(out_png: Path) -> None:
     configure_style()
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.75))
+    # Smaller figure than the content would suggest, so that when the PNG is
+    # scaled into a paper column the in-block text is not shrunk into oblivion.
+    fig, ax = plt.subplots(figsize=(5.6, 3.7))
     ax.set_xlim(0, 100)
     ax.set_ylim(0, 66)
     ax.set_aspect("equal")
     ax.axis("off")
 
     # ---- CPU die boundary --------------------------------------------------
-    rbox(ax, 3, 5, 68, 56, fill=FILL_DIE, edge=GREY_MED, lw=1.1,
+    rbox(ax, 1, 4, 74, 58, fill=FILL_DIE, edge=GREY_MED, lw=1.1,
          ls=(0, (5, 3)), round_size=2.0, z=1)
-    label(ax, 6, 58.2, "CPU die", size=7.5, color=GREY_MED, ha="left",
+    label(ax, 4, 59.4, "CPU die", size=8.0, color=GREY_MED, ha="left",
           style="italic", z=3)
 
-    # ---- CPU cores ---------------------------------------------------------
-    rbox(ax, 7, 22, 13, 30, fill=FILL_CORES, edge=GREY_DARK, lw=1.0, z=2)
-    label(ax, 13.5, 37, "CPU\ncores\n(SPDK)", size=8.5, weight="bold")
+    # ---- CPU cores (kept small, but wide enough for "(SPDK)") --------------
+    rbox(ax, 3, 18, 9.5, 31, fill=FILL_CORES, edge=GREY_DARK, lw=1.0, z=2)
+    label(ax, 7.75, 33.5, "CPU\ncores\n(SPDK)", size=8.6, weight="bold")
 
-    # ---- IAU container -----------------------------------------------------
-    rbox(ax, 24, 11, 35, 46, fill=FILL_IAU, edge=ACCENT, lw=1.7,
+    # ---- IAU container (enlarged: this is the contribution) ----------------
+    rbox(ax, 17, 8, 44.5, 51, fill=FILL_IAU, edge=ACCENT, lw=1.9,
          round_size=1.8, z=2)
-    label(ax, 41.5, 54, "IAU", size=11, weight="bold", color=ACCENT)
+    label(ax, 39.25, 55.4, "IAU", size=13.5, weight="bold", color=ACCENT)
 
     # MMIO decoder: host-facing left bar (BAR0 routing)
-    sbox(ax, 25.5, 14, 4.2, 37, fill=FILL_SUPPORT, edge=GREY_DARK, lw=1.0, z=3)
-    label(ax, 27.6, 32.5, "MMIO decoder", size=7.6, weight="bold", rot=90, z=4)
+    sbox(ax, 18.5, 12, 4.5, 41, fill=FILL_SUPPORT, edge=GREY_DARK, lw=1.0, z=3)
+    label(ax, 20.75, 32.5, "MMIO decoder", size=8.2, weight="bold", rot=90,
+          z=4)
 
-    # three hot-path engines + credit manager (2x2). Block notes kept terse;
-    # the paper text expands each one.
-    engine(ax, 31, 38, 12, 11, "SQ Engine", "SQE + PRP + CID", "0x3000")
-    engine(ax, 45, 38, 12, 11, "Doorbell\nCoalescer", "coalesce", "0x1000")
-    engine(ax, 31, 25, 12, 11, "CQ Engine", "batch + hint", "0x2000")
-    support(ax, 45, 25, 12, 11, "Credit\nManager", "backpressure")
+    # three hot-path engines + credit manager (2x2)
+    engine(ax, 25, 38, 17, 13, "SQ Engine", "SQE + PRP\n+ CID", "0x3000")
+    engine(ax, 43, 38, 17, 13, "Doorbell\nCoalescer", "coalesce", "0x1000")
+    engine(ax, 25, 23, 17, 13, "CQ Engine", "batch + hint", "0x2000")
+    support(ax, 43, 23, 17, 13, "Credit\nManager", "backpressure")
 
     # shared SRAM substrate (via round-robin arbiter)
-    sbox(ax, 31, 14, 26, 9, fill=FILL_SRAM, edge=GREY_DARK, lw=1.0, z=3)
-    label(ax, 44, 19.9, "Shared SRAM  (via arbiter)", size=7.4, weight="bold",
+    sbox(ax, 25, 12, 35, 9.5, fill=FILL_SRAM, edge=GREY_DARK, lw=1.0, z=3)
+    label(ax, 42.5, 18.5, "Shared SRAM  (via arbiter)", size=8.4,
+          weight="bold", color=GREY_DARK, z=4)
+    label(ax, 42.5, 14.4, "SQ / CQ buffers, PRP lists", size=8.0,
           color=GREY_DARK, z=4)
-    label(ax, 44, 16.2, "SQ / CQ buffers, PRP lists", size=6.4,
-          color=GREY_DARK, z=4)
 
-    # ---- on-die peripherals ------------------------------------------------
-    rbox(ax, 62, 40, 8, 12, fill=FILL_PERIPH, edge=GREY_DARK, lw=1.0, z=2)
-    label(ax, 66, 46, "IMC", size=8, weight="bold")
-    rbox(ax, 62, 15, 8, 12, fill=FILL_PERIPH, edge=GREY_DARK, lw=1.0, z=2)
-    label(ax, 66, 21, "PCIe\nRC", size=8, weight="bold")
+    # ---- on-die peripherals (widened so their labels fit the blocks) -------
+    rbox(ax, 67, 38, 7, 12, fill=FILL_PERIPH, edge=GREY_DARK, lw=1.0, z=2)
+    label(ax, 70.5, 44, "IMC", size=8.4, weight="bold")
+    rbox(ax, 67, 13, 7, 12, fill=FILL_PERIPH, edge=GREY_DARK, lw=1.0, z=2)
+    label(ax, 70.5, 19, "PCIe\nRC", size=8.4, weight="bold")
 
-    # ---- off-die: DRAM + NVMe ---------------------------------------------
-    rbox(ax, 77, 38, 21, 20, fill="#ffffff", edge=GREY_DARK, lw=1.1, z=2)
-    label(ax, 87.5, 55, "DRAM", size=8.5, weight="bold")
-    sbox(ax, 80, 48, 15, 4, fill=FILL_RING, edge=GREY_DARK, lw=0.8, z=3)
-    label(ax, 87.5, 50, "SQ ring", size=6.6, z=4)
-    sbox(ax, 80, 41, 15, 4, fill=FILL_RING, edge=GREY_DARK, lw=0.8, z=3)
-    label(ax, 87.5, 43, "CQ ring", size=6.6, z=4)
+    # ---- off-die: DRAM + NVMe (shrunk to free width for IAU + peripherals) -
+    rbox(ax, 79.5, 37, 12, 19, fill="#ffffff", edge=GREY_DARK, lw=1.1, z=2)
+    label(ax, 85.5, 52.8, "DRAM", size=9.0, weight="bold")
+    sbox(ax, 81, 46.4, 9, 4.0, fill=FILL_RING, edge=GREY_DARK, lw=0.8, z=3)
+    label(ax, 85.5, 48.4, "SQ ring", size=7.8, z=4)
+    sbox(ax, 81, 39.8, 9, 4.0, fill=FILL_RING, edge=GREY_DARK, lw=0.8, z=3)
+    label(ax, 85.5, 41.8, "CQ ring", size=7.8, z=4)
 
-    rbox(ax, 77, 12, 21, 18, fill=FILL_DEVICE, edge=GREY_DARK, lw=1.1, z=2)
-    label(ax, 87.5, 21, "NVMe SSD", size=8.5, weight="bold")
+    rbox(ax, 79.5, 12, 12, 18, fill=FILL_DEVICE, edge=GREY_DARK, lw=1.1, z=2)
+    label(ax, 85.5, 21, "NVMe\nSSD", size=9.0, weight="bold")
 
-    # ---- arrows ------------------------------------------------------------
+    # ---- arrows (spanning the widened gaps so every step reads clearly) -----
     # host I/O path (accent): submit via mailbox, poll the status/hint register
-    arrow(ax, (20, 41), (25.3, 41), color=ACCENT, lw=1.7)
-    arrow(ax, (25.3, 30), (20, 30), color=ACCENT, lw=1.7)
+    arrow(ax, (12.7, 43), (18.3, 43), color=ACCENT, lw=1.9, mscale=11)
+    arrow(ax, (18.3, 30), (12.7, 30), color=ACCENT, lw=1.9, mscale=11)
 
-    # uncore -> IMC -> DRAM (batched compatibility mirror, dashed)
-    arrow(ax, (59, 44), (61.6, 45), color=GREY_DARK, lw=1.3)
-    arrow(ax, (70, 45.5), (76.6, 46.5), color=GREY_DARK, lw=1.3, ls=(0, (4, 2)))
+    # uncore -> IMC -> DRAM (lazy backup sync to the DRAM rings, dashed)
+    arrow(ax, (61.7, 44), (66.8, 44), color=GREY_DARK, lw=1.4, mscale=11)
+    arrow(ax, (74.2, 45), (79.1, 45.5), color=GREY_DARK, lw=1.4,
+          ls=(0, (4, 2)), mscale=11)
 
     # uncore <-> PCIe RC <-> device: commands/DMA out, completions back
-    arrow(ax, (59, 22), (61.6, 21.5), color=GREY_DARK, lw=1.3, astyle="<|-|>")
-    arrow(ax, (70, 20.5), (76.6, 20.5), color=GREY_DARK, lw=1.3,
-          astyle="<|-|>")
+    arrow(ax, (61.7, 21), (66.8, 21), color=GREY_DARK, lw=1.5,
+          astyle="<|-|>", mscale=13)
+    arrow(ax, (74.2, 20.5), (79.1, 20.5), color=GREY_DARK, lw=1.5,
+          astyle="<|-|>", mscale=13)
 
     # ---- per-I/O dataflow order (light badges) -----------------------------
     # 1 submit -> 2 SQ Engine builds SQE -> 3 doorbell coalesced ->
     # 4 issue over PCIe -> 5 CQ Engine batches completions -> 6 host polls
-    stepmark(ax, 22.7, 41.0, 1)
-    stepmark(ax, 31.6, 48.4, 2)
-    stepmark(ax, 45.6, 48.4, 3)
-    stepmark(ax, 60.4, 24.2, 4)
-    stepmark(ax, 31.6, 35.4, 5)
-    stepmark(ax, 22.7, 30.0, 6)
-
-    # ---- minimal legend ----------------------------------------------------
-    handles = [
-        Line2D([0], [0], color=ACCENT, lw=1.7, marker=">", markersize=4,
-               label="host I/O path"),
-        Line2D([0], [0], color=GREY_DARK, lw=1.3, linestyle=(0, (4, 2)),
-               label="DRAM compatibility mirror"),
-    ]
-    ax.legend(handles=handles, loc="lower left", bbox_to_anchor=(0.0, -0.02),
-              frameon=False, fontsize=6.6, handlelength=2.0,
-              handletextpad=0.5, borderaxespad=0.2)
+    stepmark(ax, 15.0, 43.0, 1)
+    stepmark(ax, 26.0, 49.6, 2)
+    stepmark(ax, 44.0, 49.6, 3)
+    stepmark(ax, 64.3, 23.2, 4)
+    stepmark(ax, 26.0, 34.6, 5)
+    stepmark(ax, 15.0, 30.0, 6)
 
     fig.tight_layout(pad=0.2)
     out_png.parent.mkdir(parents=True, exist_ok=True)
