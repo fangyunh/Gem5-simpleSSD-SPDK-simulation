@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-Queue-depth sweep for paper Section 4.2 (Figure F3, fig:qd_sweep): IOPS and
-cycles per I/O versus queue depth, vanilla SPDK baseline vs IAU, on the 4 KB
-random-read workload, 1 core / 1 qpair.
+Queue-depth sweep for paper Section 4.2 (Figure F3, fig:qd_sweep): IOPS
+versus queue depth, vanilla SPDK baseline vs IAU, on the 4 KB random-read
+workload, 1 core / 1 qpair.
 
 This is the headline results figure. The load-bearing visual is the flat IAU
 IOPS curve: IAU saturates the host core at ~1.106 M IOPS for every queue
 depth, well above the baseline that only inches from 776 K to 819 K across an
-8x queue-depth increase, identifying IAU as a new CPU-bound ceiling. The
-cycles-per-IO curves on the right axis are the same story inverted, the
-baseline near 2,440-2,576 cycles/IO and IAU near 1,808.
+8x queue-depth increase, identifying IAU as a new CPU-bound ceiling.
+
+Only IOPS is plotted. Cycles/IO is the exact inverse of IOPS (clock / IOPS),
+so a second axis would duplicate the same two curves, and its IAU line would
+overlap the baseline IOPS line and invite misreading; the per-stage cycle
+story already lives in fig:iau_breakdown. The cycles/IO equivalents are still
+printed to stdout for the prose in Section 4.
 
 Data sources (the two admissible rand4k runs; all QD rows)
 ----------------------------------------------------------
@@ -52,7 +56,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 
 BASELINE_CSV = ("results/rand4k_1c1qp/rand4k_mode0_20260510/"
@@ -112,22 +115,15 @@ def plot(repo_root: Path, out_prefix: Path) -> None:
     _, iau_iops, iau_cyc = load_sweep(repo_root / IAU_CSV)
 
     fig, ax_iops = plt.subplots(figsize=(3.4, 2.5))
-    ax_cyc = ax_iops.twinx()
-    ax_cyc.spines["top"].set_visible(False)
 
-    # IOPS on the left axis, solid lines, filled markers.
-    ax_iops.plot(qd, iau_iops, color=ACCENT, marker="s", markersize=4.5,
-                 linewidth=1.4, zorder=4)
-    ax_iops.plot(qd, base_iops, color=GREY_DARK, marker="o", markersize=4.5,
-                 linewidth=1.4, zorder=4)
-
-    # Cycles/IO on the right axis, dotted lines, open markers.
-    ax_cyc.plot(qd, iau_cyc, color=ACCENT, marker="s", markersize=4.5,
-                linewidth=1.2, linestyle=":", markerfacecolor="white",
-                zorder=3)
-    ax_cyc.plot(qd, base_cyc, color=GREY_DARK, marker="o", markersize=4.5,
-                linewidth=1.2, linestyle=":", markerfacecolor="white",
-                zorder=3)
+    # IOPS only. Cycles/IO is omitted because it is the exact inverse of IOPS
+    # (clock / IOPS), so plotting it duplicates the same curves and its IAU
+    # line overlaps the baseline IOPS line; the per-stage cycle story already
+    # lives in fig:iau_breakdown.
+    ax_iops.plot(qd, iau_iops, color=ACCENT, marker="s", markersize=5,
+                 linewidth=1.6, label="IAU", zorder=4)
+    ax_iops.plot(qd, base_iops, color=GREY_DARK, marker="o", markersize=5,
+                 linewidth=1.6, label="Baseline", zorder=4)
 
     ax_iops.set_xscale("log", base=2)
     ax_iops.set_xticks(qd)
@@ -137,28 +133,16 @@ def plot(repo_root: Path, out_prefix: Path) -> None:
 
     ax_iops.set_ylabel("IOPS (millions)")
     # Axis zoomed to the data region (not zero-based) so the 1.35x gap is
-    # visible; both configurations and both metrics keep clear separation.
+    # visible instead of compressed against a zero baseline.
     ax_iops.set_ylim(0.70, 1.20)
+    ax_iops.spines["right"].set_visible(False)
     ax_iops.yaxis.grid(True, linestyle=":", linewidth=0.5, color=GREY_LIGHTER)
     ax_iops.set_axisbelow(True)
 
-    ax_cyc.set_ylabel("Cycles per I/O")
-    ax_cyc.set_ylim(1600, 2700)
-
-    # Legend: colour encodes configuration, line style encodes metric.
-    handles = [
-        Line2D([0], [0], color=ACCENT, marker="s", markersize=4.5,
-               linewidth=1.4, label="IAU"),
-        Line2D([0], [0], color=GREY_DARK, marker="o", markersize=4.5,
-               linewidth=1.4, label="Baseline"),
-        Line2D([0], [0], color="black", linewidth=1.4, linestyle="-",
-               label="IOPS (left)"),
-        Line2D([0], [0], color="black", linewidth=1.2, linestyle=":",
-               label="Cycles/IO (right)"),
-    ]
-    ax_iops.legend(handles=handles, loc="center", frameon=False,
-                   handlelength=1.8, handletextpad=0.5, borderaxespad=0.4,
-                   labelspacing=0.3, ncol=2, columnspacing=1.2)
+    # Legend below the plot, one row, identifying each line.
+    ax_iops.legend(loc="upper center", bbox_to_anchor=(0.5, -0.30),
+                   frameon=False, ncol=2, handlelength=1.8,
+                   handletextpad=0.5, columnspacing=2.0)
 
     fig.tight_layout()
     out_prefix.parent.mkdir(parents=True, exist_ok=True)

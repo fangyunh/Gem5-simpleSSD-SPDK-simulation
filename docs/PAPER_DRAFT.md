@@ -188,11 +188,11 @@ Figure~\ref{fig:iau_breakdown} attributes the saving to the submission side. The
 \begin{figure}[t]
 \centering
 \includegraphics[width=\columnwidth]{img/qd_sweep.png}
-\caption{IOPS (left axis) and cycles per I/O at the 2~GHz host clock (right axis) versus queue depth, for the vanilla SPDK baseline and IAU on 4~KB random reads. IAU's IOPS stays flat across the sweep, marking a new CPU-bound ceiling well above the baseline and well below the device aggregate.}
+\caption{IOPS versus queue depth for the vanilla SPDK baseline and IAU on 4~KB random reads. IAU's IOPS stays flat across the sweep, marking a new CPU-bound ceiling well above the baseline and well below the device aggregate.}
 \label{fig:qd_sweep}
 \end{figure}
 
-Two further results fix the design boundary. A transparent-IAU ablation that activates the uncore behind an unmodified SPDK reaches only 0.808~M IOPS at QD=128, about 0.99$\times$ the baseline, because batching completions alone cannot move a submission-dominated budget; the lift therefore requires the small host-side mailbox enablement of \S\ref{sec:iau-placement} rather than a fully transparent design. As Figure~\ref{fig:qd_sweep} shows, IAU's throughput is essentially flat across the sweep at roughly 1.106~M IOPS for every queue depth while its cycle budget holds near 1{,}810, identifying IAU as a new CPU-bound ceiling well below the 8~M device aggregate, with the residual gap left to the deferred completion-callback dispatcher.
+Two further results fix the design boundary. A transparent-IAU ablation that activates the uncore behind an unmodified SPDK reaches only 0.808~M IOPS at QD=128, about 0.99$\times$ the baseline, because batching completions alone cannot move a submission-dominated budget; the lift therefore requires the small host-side mailbox enablement of \S\ref{sec:iau-placement} rather than a fully transparent design. As Figure~\ref{fig:qd_sweep} shows, IAU's throughput is essentially flat across the sweep at roughly 1.106~M IOPS for every queue depth, equivalently a per-I/O budget near 1{,}810 cycles, identifying IAU as a new CPU-bound ceiling well below the 8~M device aggregate, with the residual gap left to the deferred completion-callback dispatcher.
 
 \subsection{Robustness and threats to validity}
 \label{sec:eval-threats}
