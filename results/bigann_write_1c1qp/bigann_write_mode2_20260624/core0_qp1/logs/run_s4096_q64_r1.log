@@ -1,0 +1,48 @@
+[trace] loaded 1225846 entries (19613536 bytes) from /mnt/9p/artifacts/bigann/diskann_bigann_trace_write.bin
+EAL: '-c <coremask>' option is deprecated, and will be removed in a future release
+EAL: 	Use '-l <corelist>' or '--lcores=<corelist>' option instead
+[DBG_MECH4] calls=1 reg_null=0 qid0=1 state=0 entered=0 qid=0 state_now=5 hint_reg=0x201000802000
+Initializing NVMe Controllers
+Attached to NVMe Controller at PCIE (0000:00:05.0) [144d:2001]
+Associating PCIE (0000:00:05.0) [144d:2001] NSID 1 with lcore 0
+Initialization complete. Launching workers.
+
+====================
+lcore 0, ns PCIE (0000:00:05.0) [144d:2001] NSID 1 statistics:
+PCIE transport:
+	polls:               77256
+	idle_polls:          19
+	completions:         973099
+	completion_calls:    77256
+	cq_mmio_doorbell_updates: 77237
+	cq_shadow_doorbell_updates: 0
+	submitted_requests:  973099
+	sq_mmio_doorbell_updates:  973099
+	sq_shadow_doorbell_updates:  0
+	queued_requests:     0
+	completions_per_poll_hist: 0:19, 1:1, 2:17, 3:225, 4:9026, 5:32576, 6:17, 7:20, 8:92, 9:2126, 10:11121, 11:33, 12:168, 13:238, 14:381, 15:5591, 16:76, 17:255, 18:552, 19:91, 20:829, 21:46, 22:196, 23:412, 24:359, 25:165, 26:18, 27:102, 28:367, 29:730, 30:661, 31:11, 32+:10735
+	pcie_stats: polls=77256 completions=973099 sq_mmio=973099 cq_mmio=77237
+========================================================
+                                                                                       Latency(us)
+Device Information                                 :       IOPS      MiB/s    Average        min        max
+PCIE (0000:00:05.0) [144d:2001] NSID 1 from core  0:  973099.00    3801.17      65.65       3.11     254.41
+========================================================
+Total                                              :  973099.00    3801.17      65.65       3.11     254.41
+
+Summary latency data for PCIE (0000:00:05.0) [144d:2001] NSID 1      from core 0:
+=================================================================================
+  1.00000% :     5.760us
+ 10.00000% :    12.799us
+ 25.00000% :    26.367us
+ 50.00000% :    54.525us
+ 75.00000% :    95.739us
+ 90.00000% :   136.185us
+ 95.00000% :   159.736us
+ 98.00000% :   184.311us
+ 99.00000% :   198.646us
+ 99.50000% :   208.886us
+ 99.90000% :   227.317us
+ 99.99000% :   243.700us
+ 99.99900% :   250.867us
+ 99.99990% :   254.963us
+ 99.99999% :   254.963us
