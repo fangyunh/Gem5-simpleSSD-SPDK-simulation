@@ -1,31 +1,35 @@
 #!/usr/bin/env python3
 """
 Op-mix robustness for paper Section 4.3 (new figure, fig:qd_sweep_opmix): IOPS
-versus queue depth, vanilla SPDK baseline vs IAU, for three op-mixes of the
-BigANN trace replay -- read-only, write-only, and 50/50 read-write -- 1 core /
-1 qpair.
+versus queue depth, vanilla SPDK baseline vs IAU, for two op-mixes of the
+BigANN trace replay -- read-only and 50/50 read-write -- 1 core / 1 qpair.
 
 Why this figure
 ---------------
 fig:qd_sweep shows the read result alone. This companion shows the IAU
 speedup is not a read-only artifact: replaying the identical BigANN address
-stream with only the operation byte changed, IAU still lifts every op-mix
-above its baseline band. The load-bearing visual is that all three IAU curves
-(solid) sit clearly above all three baseline curves (dashed). The read IAU
-curve reaches the highest ceiling (~1.10 M IOPS); write and mixed IAU cluster
-lower (~0.89-0.98 M) and nearly overlap each other, which is itself the
-finding that write and mixed behave alike. The smaller write/mixed multiplier
-(1.12-1.18x vs 1.37-1.44x read) is explained on the same axes: the write and
-mixed baselines already start higher (~798-835 K), closer to the model
-throughput ceiling, so there is less headroom for the same per-command
-offload to convert into IOPS.
+stream with the operation byte changed, IAU still lifts the mixed op stream
+above its baseline. The load-bearing visual is that both IAU curves (solid)
+sit clearly above both baseline curves (dashed). The read IAU curve reaches
+the highest ceiling (~1.10 M IOPS); the mixed IAU curve sits lower
+(~0.89-0.98 M). The smaller mixed multiplier (1.12-1.18x vs 1.37-1.44x read)
+is the point Section 4 explains: read completions arrive in dense batches the
+IAU completion path reaps whole, while any write in the stream spaces those
+completions out, so the mixed workload is reaped in small batches and gains
+less.
 
-Data sources (the four admissible BigANN op-mix runs; all QD rows)
-------------------------------------------------------------------
+Write-only is intentionally NOT drawn. It lands almost exactly on the mixed
+50/50 curve (they differ only in the third significant figure at every queue
+depth), so a third line would overlap the mixed line and add clutter with no
+information. That write and 50/50 mixed coincide is itself the finding: a
+single write in the stream already collapses the completion pattern onto the
+write-like regime, so the mix does not sit halfway between read and write. The
+stdout summary still prints all three op-mixes for the prose.
+
+Data sources (the admissible BigANN op-mix runs; all QD rows)
+-------------------------------------------------------------
   read   baseline: results/bigann_trace_1c1qp/paper_trace_mode0_20260510/core0_qp1/phase1_results.csv
   read   IAU:      results/bigann_trace_1c1qp/paper_trace_mode2_20260510/core0_qp1/phase1_results.csv
-  write  baseline: results/bigann_write_1c1qp/bigann_write_mode0_20260624/core0_qp1/phase1_results.csv
-  write  IAU:      results/bigann_write_1c1qp/bigann_write_mode2_20260624/core0_qp1/phase1_results.csv
   rw50   baseline: results/bigann_rw50_1c1qp/bigann_rw50_mode0_20260624/core0_qp1/phase1_results.csv
   rw50   IAU:      results/bigann_rw50_1c1qp/bigann_rw50_mode2_20260624/core0_qp1/phase1_results.csv
 
@@ -33,10 +37,10 @@ The write and rw50 datasets were admitted 2026-07-06 (see CLAUDE.md); they
 reuse the canonical read trace's offset/size stream with only the op byte
 flipped, so op-mix is the sole independent variable.
 
-Encoding: workload by color (read = accent, write = dark grey, mixed = mid
-grey), mode by line style (IAU = solid + filled marker, baseline = dashed +
-open marker). Style otherwise matches scripts/plot_qd_sweep.py: serif, grey
-palette with one accent (#2b5f8a), 300 dpi PNG + vector PDF.
+Encoding: workload by color (read = accent, mixed = dark grey), mode by line
+style (IAU = solid + filled marker, baseline = dashed + open marker). Style
+otherwise matches scripts/plot_qd_sweep.py: serif, grey palette with one
+accent (#2b5f8a), 300 dpi PNG + vector PDF.
 
 Usage
 -----
@@ -64,19 +68,21 @@ ACCENT = "#2b5f8a"
 HOST_HZ = 2.0e9
 
 # (label, colour, baseline csv, IAU csv, marker)
+#
+# Write-only is intentionally omitted: it lands almost exactly on the Mixed
+# 50/50 curve (both baseline and IAU differ only in the third significant
+# figure), so drawing it adds a redundant overlapping line without adding
+# information. The write == mix coincidence is the finding, not a curve worth
+# plotting twice; the two retained curves give the clean read-vs-mixed view.
 WORKLOADS = [
     ("Read", ACCENT,
      "results/bigann_trace_1c1qp/paper_trace_mode0_20260510/core0_qp1/phase1_results.csv",
      "results/bigann_trace_1c1qp/paper_trace_mode2_20260510/core0_qp1/phase1_results.csv",
      "s"),
-    ("Write", GREY_DARK,
-     "results/bigann_write_1c1qp/bigann_write_mode0_20260624/core0_qp1/phase1_results.csv",
-     "results/bigann_write_1c1qp/bigann_write_mode2_20260624/core0_qp1/phase1_results.csv",
-     "o"),
-    ("Mixed 50/50", GREY_LIGHT,
+    ("Mixed 50/50", GREY_DARK,
      "results/bigann_rw50_1c1qp/bigann_rw50_mode0_20260624/core0_qp1/phase1_results.csv",
      "results/bigann_rw50_1c1qp/bigann_rw50_mode2_20260624/core0_qp1/phase1_results.csv",
-     "^"),
+     "o"),
 ]
 
 
@@ -159,7 +165,7 @@ def plot(repo_root: Path, out_prefix: Path) -> None:
                label="Baseline"),
     ]
     ax.legend(handles=workload_handles + mode_handles, loc="upper center",
-              bbox_to_anchor=(0.5, -0.28), frameon=False, ncol=5,
+              bbox_to_anchor=(0.5, -0.28), frameon=False, ncol=4,
               handlelength=1.6, handletextpad=0.4, columnspacing=1.0)
 
     fig.tight_layout()
