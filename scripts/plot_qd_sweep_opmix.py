@@ -37,7 +37,7 @@ The write and rw50 datasets were admitted 2026-07-06 (see CLAUDE.md); they
 reuse the canonical read trace's offset/size stream with only the op byte
 flipped, so op-mix is the sole independent variable.
 
-Encoding: workload by color (read = accent, mixed = dark grey), mode by line
+Encoding: workload by color (read = accent, mixed = mid grey), mode by line
 style (IAU = solid + filled marker, baseline = dashed + open marker). Style
 otherwise matches scripts/plot_qd_sweep.py: serif, grey palette with one
 accent (#2b5f8a), 300 dpi PNG + vector PDF.
@@ -62,6 +62,7 @@ from matplotlib.lines import Line2D
 
 
 GREY_DARK = "#3f3f3f"
+GREY_MID = "#808080"
 GREY_LIGHT = "#a8a8a8"
 GREY_LIGHTER = "#cccccc"
 ACCENT = "#2b5f8a"
@@ -79,7 +80,7 @@ WORKLOADS = [
      "results/bigann_trace_1c1qp/paper_trace_mode0_20260510/core0_qp1/phase1_results.csv",
      "results/bigann_trace_1c1qp/paper_trace_mode2_20260510/core0_qp1/phase1_results.csv",
      "s"),
-    ("Mixed 50/50", GREY_DARK,
+    ("Mixed 50/50", GREY_MID,
      "results/bigann_rw50_1c1qp/bigann_rw50_mode0_20260624/core0_qp1/phase1_results.csv",
      "results/bigann_rw50_1c1qp/bigann_rw50_mode2_20260624/core0_qp1/phase1_results.csv",
      "o"),
