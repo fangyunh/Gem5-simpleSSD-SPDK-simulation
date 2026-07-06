@@ -39,11 +39,12 @@ flipped, so op-mix is the sole independent variable.
 
 Encoding: method by color (IAU = accent blue, baseline = dark grey) and
 workload by marker shape (read = square, mixed = circle), so each of the four
-curves is a distinct color-and-shape pair and all lines are solid. The legend
-is split into a Method block (the two colors) and a Workload block (the two
-shapes) so each dimension is named on its own. Style otherwise matches
-scripts/plot_qd_sweep.py: serif, grey palette with one accent (#2b5f8a),
-300 dpi PNG + vector PDF.
+curves is a distinct color-and-shape pair and all lines are solid. A single
+legend sits fully below the x-axis and names each curve directly (IAU-Read,
+IAU-Mix, Baseline-Read, Baseline-Mix), each legend glyph carrying that curve's
+own color and marker so it matches the line on the plot. Style otherwise
+matches scripts/plot_qd_sweep.py: serif, grey palette with one accent
+(#2b5f8a), 300 dpi PNG + vector PDF.
 
 Usage
 -----
@@ -74,7 +75,6 @@ HOST_HZ = 2.0e9
 # Color encodes method, marker shape encodes workload.
 IAU_COLOR = ACCENT
 BASE_COLOR = GREY_DARK
-MARKER_SWATCH = "black"   # neutral colour for the shape legend, so it reads as shape not method
 
 # (label, marker, baseline csv, IAU csv)
 #
@@ -158,28 +158,23 @@ def plot(repo_root: Path, out_prefix: Path) -> None:
     ax.yaxis.grid(True, linestyle=":", linewidth=0.5, color=GREY_LIGHTER)
     ax.set_axisbelow(True)
 
-    # Two labelled legends so each encoding dimension is named on its own:
-    # color = method (IAU vs baseline), marker shape = workload (read vs mixed).
-    method_handles = [
-        Line2D([0], [0], color=IAU_COLOR, linewidth=1.6, label="IAU"),
-        Line2D([0], [0], color=BASE_COLOR, linewidth=1.6, label="Baseline"),
+    # One legend fully below the x-axis, each entry naming a specific curve.
+    # Every handle carries that curve's real color (method) and marker
+    # (workload), so the legend glyph matches the line on the plot.
+    combined_handles = [
+        Line2D([0], [0], color=IAU_COLOR, marker="s", linewidth=1.5,
+               markersize=5, label="IAU-Read"),
+        Line2D([0], [0], color=IAU_COLOR, marker="o", linewidth=1.5,
+               markersize=5, label="IAU-Mix"),
+        Line2D([0], [0], color=BASE_COLOR, marker="s", linewidth=1.5,
+               markersize=5, label="Baseline-Read"),
+        Line2D([0], [0], color=BASE_COLOR, marker="o", linewidth=1.5,
+               markersize=5, label="Baseline-Mix"),
     ]
-    workload_handles = [
-        Line2D([0], [0], color=MARKER_SWATCH, marker=m, linestyle="none",
-               markersize=5, label=lbl)
-        for lbl, m, _, _ in WORKLOADS
-    ]
-    leg_method = ax.legend(handles=method_handles, title="Method",
-                           loc="upper left", bbox_to_anchor=(0.0, -0.15),
-                           frameon=False, handlelength=1.8, handletextpad=0.5,
-                           labelspacing=0.3, title_fontsize=7.5)
-    leg_method._legend_box.align = "left"
-    ax.add_artist(leg_method)
-    leg_work = ax.legend(handles=workload_handles, title="Workload",
-                         loc="upper right", bbox_to_anchor=(1.0, -0.15),
-                         frameon=False, handlelength=1.2, handletextpad=0.5,
-                         labelspacing=0.3, title_fontsize=7.5)
-    leg_work._legend_box.align = "left"
+    ax.legend(handles=combined_handles, loc="upper center",
+              bbox_to_anchor=(0.5, -0.30), frameon=False, ncol=2,
+              handlelength=2.0, handletextpad=0.5, columnspacing=1.8,
+              labelspacing=0.5)
 
     fig.tight_layout()
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
