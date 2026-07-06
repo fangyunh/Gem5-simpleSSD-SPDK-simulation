@@ -37,10 +37,13 @@ The write and rw50 datasets were admitted 2026-07-06 (see CLAUDE.md); they
 reuse the canonical read trace's offset/size stream with only the op byte
 flipped, so op-mix is the sole independent variable.
 
-Encoding: workload by color (read = accent, mixed = mid grey), mode by line
-style (IAU = solid + filled marker, baseline = dashed + open marker). Style
-otherwise matches scripts/plot_qd_sweep.py: serif, grey palette with one
-accent (#2b5f8a), 300 dpi PNG + vector PDF.
+Encoding: method by color (IAU = accent blue, baseline = dark grey) and
+workload by marker shape (read = square, mixed = circle), so each of the four
+curves is a distinct color-and-shape pair and all lines are solid. The legend
+is split into a Method block (the two colors) and a Workload block (the two
+shapes) so each dimension is named on its own. Style otherwise matches
+scripts/plot_qd_sweep.py: serif, grey palette with one accent (#2b5f8a),
+300 dpi PNG + vector PDF.
 
 Usage
 -----
@@ -68,7 +71,12 @@ GREY_LIGHTER = "#cccccc"
 ACCENT = "#2b5f8a"
 HOST_HZ = 2.0e9
 
-# (label, colour, baseline csv, IAU csv, marker)
+# Color encodes method, marker shape encodes workload.
+IAU_COLOR = ACCENT
+BASE_COLOR = GREY_DARK
+MARKER_SWATCH = "black"   # neutral colour for the shape legend, so it reads as shape not method
+
+# (label, marker, baseline csv, IAU csv)
 #
 # Write-only is intentionally omitted: it lands almost exactly on the Mixed
 # 50/50 curve (both baseline and IAU differ only in the third significant
@@ -76,14 +84,12 @@ HOST_HZ = 2.0e9
 # information. The write == mix coincidence is the finding, not a curve worth
 # plotting twice; the two retained curves give the clean read-vs-mixed view.
 WORKLOADS = [
-    ("Read", ACCENT,
+    ("Read", "s",
      "results/bigann_trace_1c1qp/paper_trace_mode0_20260510/core0_qp1/phase1_results.csv",
-     "results/bigann_trace_1c1qp/paper_trace_mode2_20260510/core0_qp1/phase1_results.csv",
-     "s"),
-    ("Mixed 50/50", GREY_MID,
+     "results/bigann_trace_1c1qp/paper_trace_mode2_20260510/core0_qp1/phase1_results.csv"),
+    ("Mixed 50/50", "o",
      "results/bigann_rw50_1c1qp/bigann_rw50_mode0_20260624/core0_qp1/phase1_results.csv",
-     "results/bigann_rw50_1c1qp/bigann_rw50_mode2_20260624/core0_qp1/phase1_results.csv",
-     "o"),
+     "results/bigann_rw50_1c1qp/bigann_rw50_mode2_20260624/core0_qp1/phase1_results.csv"),
 ]
 
 
@@ -126,16 +132,15 @@ def plot(repo_root: Path, out_prefix: Path) -> None:
 
     qd_ref: list[int] = []
     summary: list[str] = []
-    for label, colour, base_csv, iau_csv, marker in WORKLOADS:
+    for label, marker, base_csv, iau_csv in WORKLOADS:
         qd, base_iops = load_sweep(repo_root / base_csv)
         _, iau_iops = load_sweep(repo_root / iau_csv)
         qd_ref = qd
 
-        ax.plot(qd, iau_iops, color=colour, marker=marker, markersize=4.5,
+        ax.plot(qd, iau_iops, color=IAU_COLOR, marker=marker, markersize=4.5,
                 linewidth=1.5, linestyle="-", zorder=4)
-        ax.plot(qd, base_iops, color=colour, marker=marker, markersize=4.5,
-                markerfacecolor="white", linewidth=1.3, linestyle="--",
-                zorder=3)
+        ax.plot(qd, base_iops, color=BASE_COLOR, marker=marker, markersize=4.5,
+                linewidth=1.5, linestyle="-", zorder=3)
 
         for q, bi, ii in zip(qd, base_iops, iau_iops):
             summary.append(f"  {label:<12s} QD={q:<4d} baseline {bi:.3f} M   "
@@ -153,21 +158,28 @@ def plot(repo_root: Path, out_prefix: Path) -> None:
     ax.yaxis.grid(True, linestyle=":", linewidth=0.5, color=GREY_LIGHTER)
     ax.set_axisbelow(True)
 
-    # Two-part legend: workload colour, then mode line style.
+    # Two labelled legends so each encoding dimension is named on its own:
+    # color = method (IAU vs baseline), marker shape = workload (read vs mixed).
+    method_handles = [
+        Line2D([0], [0], color=IAU_COLOR, linewidth=1.6, label="IAU"),
+        Line2D([0], [0], color=BASE_COLOR, linewidth=1.6, label="Baseline"),
+    ]
     workload_handles = [
-        Line2D([0], [0], color=c, marker=m, markersize=4.5, linewidth=1.5,
-               label=lbl)
-        for lbl, c, _, _, m in WORKLOADS
+        Line2D([0], [0], color=MARKER_SWATCH, marker=m, linestyle="none",
+               markersize=5, label=lbl)
+        for lbl, m, _, _ in WORKLOADS
     ]
-    mode_handles = [
-        Line2D([0], [0], color=GREY_DARK, linewidth=1.5, linestyle="-",
-               label="IAU"),
-        Line2D([0], [0], color=GREY_DARK, linewidth=1.3, linestyle="--",
-               label="Baseline"),
-    ]
-    ax.legend(handles=workload_handles + mode_handles, loc="upper center",
-              bbox_to_anchor=(0.5, -0.28), frameon=False, ncol=4,
-              handlelength=1.6, handletextpad=0.4, columnspacing=1.0)
+    leg_method = ax.legend(handles=method_handles, title="Method",
+                           loc="upper left", bbox_to_anchor=(0.0, -0.15),
+                           frameon=False, handlelength=1.8, handletextpad=0.5,
+                           labelspacing=0.3, title_fontsize=7.5)
+    leg_method._legend_box.align = "left"
+    ax.add_artist(leg_method)
+    leg_work = ax.legend(handles=workload_handles, title="Workload",
+                         loc="upper right", bbox_to_anchor=(1.0, -0.15),
+                         frameon=False, handlelength=1.2, handletextpad=0.5,
+                         labelspacing=0.3, title_fontsize=7.5)
+    leg_work._legend_box.align = "left"
 
     fig.tight_layout()
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
